@@ -1,0 +1,13 @@
+.git
+.next
+node_modules
+.env*
+*.log
+*.zip
+*.tgz
+/data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
