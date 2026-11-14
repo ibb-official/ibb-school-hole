@@ -1,0 +1,58 @@
+services:
+  web:
+    image: ghcr.io/ibb-official/ibb-school-hole:latest
+    container_name: ibb-school-hole-web
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${HOLE_PORT:-3020}:3000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - FORUM_DB_PATH=/app/data/forum.db
+      - TRUST_PROXY_HEADERS=${TRUST_PROXY_HEADERS:-true}
+      - FEATURE_AUTH_ENABLED=${FEATURE_AUTH_ENABLED:-false}
+      - FEATURE_POSTING_ENABLED=${FEATURE_POSTING_ENABLED:-false}
+      - CAPTCHA_PROVIDER=${CAPTCHA_PROVIDER:-disabled}
+      - CAPTCHA_SITE_KEY=${CAPTCHA_SITE_KEY:-}
+      - CAPTCHA_SECRET_KEY=${CAPTCHA_SECRET_KEY:-}
+      - AI_MODERATION_PROVIDER=${AI_MODERATION_PROVIDER:-disabled}
+      - AI_MODERATION_API_URL=${AI_MODERATION_API_URL:-}
+      - AI_MODERATION_API_KEY=${AI_MODERATION_API_KEY:-}
+      - AI_MODERATION_MODEL=${AI_MODERATION_MODEL:-}
+      - SESSION_SECRET=${SESSION_SECRET:-}
+      - ANONYMOUS_HMAC_SECRET=${ANONYMOUS_HMAC_SECRET:-}
+      - IP_HASH_SALT=${IP_HASH_SALT:-}
+      - FORM_SIGNING_SECRET=${FORM_SIGNING_SECRET:-}
+    networks:
+      - ibb-school-hole-net
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/.next/cache
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" ]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+networks:
+  ibb-school-hole-net:
+    name: ibb-school-hole_default
+    ipam:
+      config:
+        - subnet: 172.20.3.0/24
+          gateway: 172.20.3.1

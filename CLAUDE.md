@@ -30,37 +30,40 @@
 | 协作者与评审 | 已配置 `.github/CODEOWNERS`（`@huihiya @guaiqi1964-dev @IGNGserver @hxsx1016 @ljy111222`） |
 | CI/CD 流水线 | 已配置 `.github/workflows/ci.yml` 与 `.github/workflows/deploy.yml`（带 `paths` 过滤，应用代码落地后自动激活） |
 | 规范文档 | 已完成 `AGENTS.md`、`CLAUDE.md`、`README.md` |
-| 应用脚手架 | **待初始化**（尚未写入 `package.json`、`src/`、`Dockerfile`、`docker-compose.yml`） |
+| 应用脚手架 | **已完成一期全栈代码与锁定态实现**（Next.js 15 + SQLite WAL + 防爆破限流 + L1 隐私过滤 + `Dockerfile` + `docker-compose.yml`；总闸门默认关闭，0 用户 0 帖子） |
+| 二期接入待办 | 接入人机验证（Turnstile / Altcha）与 AI 审核接口后，方可在生产 `.env` 开启 `FEATURE_AUTH_ENABLED` / `FEATURE_POSTING_ENABLED` |
 | 生产环境配置 | **待分配**：`<HOLE_PORT>`、`/opt/ibb-school-hole/`、Cloudflare DNS（`hole.bj166zx.cn` 灰云指向 `108.165.233.143`）、`edge-caddy` 站点块、`deploy-hole` 受控命令及仓库 SSH Deploy Secrets |
 
 ---
 
-## 三、规划代码结构
-
-后续初始化 Next.js 应用时，参考 `bj166-school-site` 与 `ibb-school-map` 保持结构清晰：
+## 三、代码结构
 
 ```
 ├── .github/
 │   ├── CODEOWNERS               PR 自动请求全体协作者评审
 │   └── workflows/
-│       ├── ci.yml               PR 阶段自动运行 lint 与 build
+│       ├── ci.yml               PR 阶段自动运行 lint、安全测试与 build
 │       └── deploy.yml           main 分支构建 GHCR 镜像并部署至 sofia-vps
 ├── src/
 │   ├── app/
-│   │   ├── layout.tsx           全局布局、元数据与非官方免责页眉/页脚
-│   │   ├── page.tsx             论坛 / 树洞首页（分区筛选 / 帖子列表 / 检索）
-│   │   ├── globals.css          全局样式（兼顾移动端阅读与触控交互）
-│   │   ├── post/[id]/           帖子详情与互动页
-│   │   ├── submit/              投稿 / 发帖入口（含风控与社区公约确认）
-│   │   ├── rules/               社区公约、免责声明与隐私保护边界
-│   │   └── ...                  关于本站 / 404 等页面
-│   ├── components/              导航栏、页脚、帖子卡片、发帖/举报表单、筛选栏等
-│   ├── lib/                     内容审核/脱敏校验、限流、存储适配器等通用模块
-│   └── data/                    板块分类、社区公约、示例/静态内容等结构化数据
-├── public/                      校徽/站点标识、轻量图标（WebP/SVG）
-├── Dockerfile                   Next.js Standalone 多阶段镜像构建定义
-├── docker-compose.yml           sofia-vps 生产容器编排（独立端口、网络与可选 data 卷）
-├── next.config.mjs              Next.js 运行时配置（output: 'standalone'）
+│   │   ├── layout.tsx           全局布局、主题防闪烁、常驻非官方免责页眉/页脚
+│   │   ├── page.tsx             论坛首页（板块筛选 / 检索 / 空白状态 / 运行看板）
+│   │   ├── login/               登录页（一期按钮 disabled 锁止）
+│   │   ├── register/            注册页（支持用户名+密码、选填邮箱，一期按钮 disabled 锁止）
+│   │   ├── submit/              纯文本发帖页（含 L1 本地隐私实时预检，一期按钮 disabled 锁止）
+│   │   ├── post/[id]/           帖子详情、楼层评论与锁定态回复框
+│   │   ├── rules/               社区公约、隐私保护红线与免责声明
+│   │   ├── about/               安全架构、防爆破与树洞防开盒说明
+│   │   └── api/                 健康检查、状态、认证、帖子、评论、举报 Route Handlers
+│   ├── components/              导航栏、声明条、帖子卡片、空状态、系统状态看板、交互表单
+│   ├── data/                    7 个论坛板块（含匿名树洞）与举报原因分类
+│   └── lib/                     配置总闸门、SQLite WAL、scrypt/会话、CSRF/限流/反脚本、L1/L2 审核与 HMAC 匿名隔离
+├── tests/                       安全、防爆破、隐私过滤与匿名隔离集成测试
+├── public/                      logo-mark.svg 轻量矢量标识
+├── .env.example                 环境变量模板
+├── Dockerfile                   Next.js Standalone 多阶段硬化镜像定义（含 Alpine libstdc++ 支持）
+├── docker-compose.yml           sofia-vps 生产容器编排（127.0.0.1 绑定、只读根文件、data 卷、172.20.3.0/24）
+├── next.config.mjs              Next.js 运行时配置（output: 'standalone'、serverExternalPackages、安全头）
 ├── tsconfig.json
 └── AGENTS.md                    服务器边界、风控红线与团队协作规范
 ```
