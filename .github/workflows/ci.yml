@@ -12,6 +12,7 @@ on:
       - 'next.config.*'
       - 'tsconfig.json'
       - 'eslint.config.*'
+      - 'tests/**'
       - '.github/workflows/ci.yml'
 
 concurrency:
@@ -37,6 +38,9 @@ jobs:
 
       - name: Run ESLint
         run: npm run lint
+
+      - name: Run Security & Backend Tests
+        run: npm test
 
       - name: Run Next.js Build
         run: npm run build

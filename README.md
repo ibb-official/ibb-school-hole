@@ -27,20 +27,38 @@
 
 ## 仓库结构
 
-当前仓库已完成协作配置与规范骨架，应用代码将通过后续 PR 逐步初始化：
+已完成一期全栈脚手架（Next.js App Router + TypeScript + SQLite WAL + 防爆破与隐私风控底座 + 现代锁定态前端），核心目录如下：
 
 ```
 ├── .github/
 │   ├── CODEOWNERS              PR 自动请求全体协作者评审
 │   └── workflows/
-│       ├── ci.yml              GitHub Actions PR 校验（ESLint + Next.js Build）
+│       ├── ci.yml              GitHub Actions PR 校验（ESLint + 安全单测 + Next.js Build）
 │       └── deploy.yml          GitHub Actions 构建镜像、推送 GHCR 与远程部署流水线
+├── public/
+│   └── logo-mark.svg           站点轻量矢量标识
+├── src/
+│   ├── app/                    首页、登录/注册/发帖（一期锁定态）、详情、社区公约、安全说明及 API 路由
+│   ├── components/             导航栏、常驻非官方声明条、状态看板、表单与主题切换组件
+│   ├── data/                   7 大论坛板块（含匿名树洞）与举报原因枚举
+│   └── lib/                    SQLite WAL 建表、scrypt/会话、防爆破限流、L1/L2 审核与树洞匿名隔离
+├── tests/                      安全、防爆破、隐私过滤与匿名隔离集成测试
 ├── .dockerignore               Docker 构建排除规则（含本地库与运行数据排除）
+├── .env.example                环境变量与一期总闸门模板
 ├── .gitignore                  Git 忽略规则（Node/Next.js/环境变量/本地数据库）
+├── Dockerfile                  Next.js Standalone 多阶段硬化镜像定义
+├── docker-compose.yml          sofia-vps 生产容器编排（独立端口、网络与 data 卷）
+├── next.config.mjs             Next.js 运行时配置（output: 'standalone' + 安全响应头）
+├── tsconfig.json
 ├── AGENTS.md                   服务器职责边界、内容风控红线与团队协作规范（AI/协作者必读）
 ├── CLAUDE.md                   项目交接说明与当前状态唯一入口
 └── README.md                   项目说明与本地开发指引
 ```
+
+### 一期环境变量与总闸门说明
+
+- 默认 `FEATURE_AUTH_ENABLED=false`、`FEATURE_POSTING_ENABLED=false`：页面完整展示，但登录/注册/发帖按钮固定 `disabled`，对应写入接口统一返回 `403 FEATURE_LOCKED`，数据库保持 `0` 用户、`0` 帖子。
+- 后续接入人机验证（`CAPTCHA_PROVIDER=turnstile|altcha`）与 AI 内容审核（`AI_MODERATION_PROVIDER=openai_compatible`）后，在 `/opt/ibb-school-hole/.env` 配置密钥并开启总闸门即可正式运行（完整变量列表见 `.env.example`）。
 
 ---
 
