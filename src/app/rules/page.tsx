@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 export const metadata: Metadata = {
-  title: "社区公约与免责声明",
+  title: "社区公约",
 };
 
 export default function RulesPage() {
@@ -13,31 +13,24 @@ export default function RulesPage() {
           公约目录
         </div>
         <nav className="docs-toc-list">
-          <a href="#unofficial">一、非官方定位与免责声明</a>
-          <a href="#privacy">二、师生隐私保护红线</a>
-          <a href="#content">三、内容安全与禁止行为</a>
-          <a href="#treehole">四、匿名树洞规则边界</a>
-          <a href="#moderation">五、审核、举报与下架流程</a>
+          <a href="#privacy">一、师生隐私保护红线</a>
+          <a href="#content">二、内容安全与禁止行为</a>
+          <a href="#treehole">三、匿名树洞规则边界</a>
+          <a href="#moderation">四、审核、举报与下架流程</a>
         </nav>
       </aside>
 
       <article className="surface-card docs-article">
-        <h1>社区公约、隐私保护红线与非官方免责声明</h1>
+        <h1>社区公约与隐私保护红线</h1>
         <p>
-          欢迎查阅「校园论坛（ibb-school-hole）」社区规则。任何访问、注册与发帖行为均须严格遵守以下约定。
+          欢迎查阅「校园论坛」社区规则。访问、注册与发帖即视为遵守以下约定；站点性质、内容归属与维护者责任边界见
+          <Link href="/disclaimer" className="compliance-link">
+            《免责声明》
+          </Link>
+          。
         </p>
 
-        <h2 id="unofficial">一、非官方定位与免责声明</h2>
-        <ul>
-          <li>
-            本站为<strong>学生自发协作维护的非官方校园交流与匿名树洞站点</strong>，不隶属于北京市第一六六中学，亦不代表任何校方机构或教育行政部门。
-          </li>
-          <li>
-            站内所有帖子、匿名树洞投稿及楼层评论均仅代表发布者个人观点；请勿将本站任何内容视作学校正式通知、招生或学务公告依据。
-          </li>
-        </ul>
-
-        <h2 id="privacy">二、师生隐私保护红线（绝对禁止）</h2>
+        <h2 id="privacy">一、师生隐私保护红线（绝对禁止）</h2>
         <ul>
           <li>
             <strong>禁止人肉与身份曝光</strong>：严禁公开或暗示曝光在校师生及工作人员的真实姓名（历史公开人物除外）、学号/工号、具体班级与座次、家庭住址等可识别个人身份的信息。
@@ -50,14 +43,14 @@ export default function RulesPage() {
           </li>
         </ul>
 
-        <h2 id="content">三、内容安全与禁止行为</h2>
+        <h2 id="content">二、内容安全与禁止行为</h2>
         <ul>
           <li>严禁校园欺凌、人身攻击、恶意造谣诽谤、地域/群体歧视及煽动对立言论。</li>
           <li>严禁代考代写、兼职刷单、培训商业引流、色情低俗、暴力血腥及一切违反中华人民共和国法律法规的内容。</li>
           <li>严禁利用脚本批量注册账号、恶意撞库爆破、刷屏屠版或尝试绕过安全限制。</li>
         </ul>
 
-        <h2 id="treehole">四、匿名树洞规则边界</h2>
+        <h2 id="treehole">三、匿名树洞规则边界</h2>
         <ul>
           <li>
             「匿名树洞」板块仅面向情绪倾诉、学习烦恼与校园生活分享，并非法外之地。
@@ -73,7 +66,7 @@ export default function RulesPage() {
           </li>
         </ul>
 
-        <h2 id="moderation">五、审核、举报与下架流程</h2>
+        <h2 id="moderation">四、审核、举报与下架流程</h2>
         <p>
           所有发帖与评论均须依次经过 <strong>L1 本地隐私与敏感词即时拦截</strong> 与{" "}
           <strong>L2 AI 内容语义审核</strong>（接入中）。内容上线后若被举报核实违规，将被立即隐藏或下架处理。

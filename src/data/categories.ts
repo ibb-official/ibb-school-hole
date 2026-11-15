@@ -66,7 +66,7 @@ export const DEFAULT_CATEGORIES: readonly CategoryDefinition[] = [
   {
     slug: "notice",
     name: "站务与公约",
-    description: "非官方站点更新日志、功能开放公告与社区规则修订说明",
+    description: "站点更新日志、功能开放公告与社区规则修订说明",
     accentColor: "#DC2626",
     allowAnonymous: false,
     minTrustLevel: 2,

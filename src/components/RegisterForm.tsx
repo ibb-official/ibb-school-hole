@@ -277,9 +277,13 @@ export function RegisterForm({ authEnabled, captchaProvider }: RegisterFormProps
             onChange={(e) => setAgreedRules(e.target.checked)}
           />
           <span>
-            我已知晓本站为非官方学生协作项目，已阅读并同意{" "}
+            我已阅读并同意
             <Link href="/rules" className="compliance-link">
-              《社区公约、隐私保护红线与免责声明》
+              《社区公约》
+            </Link>
+            与
+            <Link href="/disclaimer" className="compliance-link">
+              《免责声明》
             </Link>
             。
           </span>

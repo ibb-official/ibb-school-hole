@@ -3,7 +3,6 @@
   --bg-surface: #ffffff;
   --bg-subtle: #f1f5f9;
   --bg-elevated: rgba(255, 255, 255, 0.88);
-  --bg-banner: #f1f5f9;
   --border-hairline: rgba(15, 23, 42, 0.08);
   --border-strong: rgba(15, 23, 42, 0.16);
   --text-primary: #0f172a;
@@ -31,7 +30,6 @@ html[data-theme="dark"] {
   --bg-surface: #111827;
   --bg-subtle: #1a2333;
   --bg-elevated: rgba(17, 24, 39, 0.88);
-  --bg-banner: #131b2b;
   --border-hairline: rgba(148, 163, 184, 0.14);
   --border-strong: rgba(148, 163, 184, 0.26);
   --text-primary: #f8fafc;
@@ -106,38 +104,6 @@ select {
   padding: 0 20px;
 }
 
-/* ---------- 顶部常驻非官方声明细条 ---------- */
-.compliance-strip {
-  background-color: var(--bg-banner);
-  border-bottom: 1px solid var(--border-hairline);
-  font-size: 12.5px;
-  color: var(--text-secondary);
-}
-
-.compliance-strip-inner {
-  min-height: 34px;
-  padding: 5px 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.compliance-strip-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-  background-color: var(--status-pending);
-  flex-shrink: 0;
-}
-
 .compliance-link {
   color: var(--accent-link);
   font-weight: 500;
@@ -189,14 +155,14 @@ select {
   gap: 8px;
 }
 
-.unofficial-badge {
-  font-size: 11px;
-  font-weight: 600;
-  padding: 2px 7px;
-  border-radius: 999px;
-  background-color: var(--bg-subtle);
-  border: 1px solid var(--border-hairline);
-  color: var(--text-secondary);
+.unofficial {
+  position: relative;
+  top: -1px;
+  font-size: 10.5px;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  white-space: nowrap;
 }
 
 .header-search {
@@ -1064,27 +1030,28 @@ select {
 .site-footer {
   border-top: 1px solid var(--border-hairline);
   background-color: var(--bg-surface);
-  padding: 28px 0;
-  font-size: 13px;
-  color: var(--text-secondary);
+  padding: 18px 0;
+  font-size: 12.5px;
+  color: var(--text-muted);
 }
 
-.footer-grid {
+.footer-inner {
   display: flex;
   justify-content: space-between;
-  gap: 24px;
+  align-items: center;
+  gap: 20px;
   flex-wrap: wrap;
 }
 
-.footer-disclaimer {
-  max-width: 640px;
+.footer-copy {
+  margin: 0;
 }
 
 .footer-links {
   display: flex;
   flex-wrap: wrap;
   gap: 16px;
-  align-items: flex-start;
+  align-items: center;
 }
 
 .footer-links a:hover {
