@@ -226,7 +226,7 @@ export async function registerUser(
     throw new ServiceError(
       "RULES_NOT_ACCEPTED",
       400,
-      "请先阅读并同意《社区公约与免责声明》。"
+      "请先阅读并同意《社区公约》与《免责声明》。"
     );
   }
 

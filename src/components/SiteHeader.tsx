@@ -17,7 +17,9 @@ export function SiteHeader({ initialQuery = "" }: { initialQuery?: string }) {
             />
             <span className="brand-title">
               校园论坛
-              <span className="unofficial-badge">非官方</span>
+              <span className="unofficial" lang="en" title="unofficial">
+                unofficial
+              </span>
             </span>
           </Link>
         </div>
