@@ -22,6 +22,8 @@ export function SubmitPostForm({
   const [content, setContent] = useState("");
   const [isAnonymous, setIsAnonymous] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [loginRequired, setLoginRequired] = useState(false);
+  const [pendingPostId, setPendingPostId] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const selectedCategory = useMemo(
@@ -54,6 +56,7 @@ export function SubmitPostForm({
     }
 
     setErrorMsg(null);
+    setLoginRequired(false);
     setSubmitting(true);
     try {
       const response = await fetch("/api/posts", {
@@ -72,10 +75,18 @@ export function SubmitPostForm({
       const payload = (await response.json()) as {
         ok?: boolean;
         message?: string;
-        post?: { id: number };
+        moderationAction?: string;
+        post?: { id: number; moderationStatus?: string };
       };
       if (!response.ok || !payload.ok || !payload.post) {
+        setLoginRequired(response.status === 401);
         setErrorMsg(payload.message ?? "发帖失败，请检查输入内容。");
+        return;
+      }
+      if (payload.moderationAction === "pending_review" || payload.post.moderationStatus === "pending_review") {
+        setPendingPostId(payload.post.id);
+        setTitle("");
+        setContent("");
         return;
       }
       router.push(`/post/${payload.post.id}`);
@@ -85,6 +96,19 @@ export function SubmitPostForm({
     } finally {
       setSubmitting(false);
     }
+  }
+
+  if (pendingPostId !== null) {
+    return (
+      <div className="surface-card form-card">
+        <h1 className="form-title">投稿已提交</h1>
+        <p className="form-subtitle" role="status">你的帖子正在等待审核，通过后会在讨论区显示。</p>
+        <div className="empty-actions">
+          <Link href="/account/submissions" className="btn btn-primary">查看我的投稿</Link>
+          <button type="button" className="btn btn-secondary" onClick={() => setPendingPostId(null)}>继续发帖</button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -99,7 +123,7 @@ export function SubmitPostForm({
           <Lock size={17} style={{ flexShrink: 0, marginTop: "2px" }} />
           <div>
             <strong>当前暂未开放发帖（一期锁定态）</strong>
-            你可以在下方体验板块切换、匿名树洞隔离说明与 L1 本地隐私风险实时预检；因 AI 内容审核尚未接入，发布按钮与发帖 API 均已锁定。
+            你仍可查看编辑器和板块说明，发帖开放后即可提交。
           </div>
         </div>
       )}
@@ -144,9 +168,7 @@ export function SubmitPostForm({
               </span>
             </label>
             <p className="field-hint" style={{ margin: "6px 0 0 22px" }}>
-              开启后，公开列表、详情页与 API JSON 返回体将彻底剥离作者用户名与用户 ID；同一帖内其他回复者将获得基于{" "}
-              <code className="mono">HMAC(post_id + user_id)</code>{" "}
-              派生的跨帖不可关联代号（如 <code className="mono">匿名同学 #7B2A</code>）。
+              开启后，公开页面会使用本帖内的匿名代号。请勿在标题或正文中主动透露身份。
             </p>
           </div>
         )}
@@ -185,7 +207,7 @@ export function SubmitPostForm({
             className="text-area"
             maxLength={8000}
             placeholder={
-              "请使用纯文本分段写作（回车换行、空行分段）。\n系统将自动过滤控制字符并拒绝任何 HTML 标签注入。\n\n测试隐私预检提示：可尝试输入手机号、微信号或具体班级号查看即时拦截反馈。"
+              "请使用纯文本分段写作（回车换行、空行分段）。\n内容将按纯文本显示。\n\n测试隐私预检提示：可尝试输入手机号、微信号或具体班级号查看即时拦截反馈。"
             }
             value={content}
             onChange={(e) => setContent(e.target.value)}
@@ -227,7 +249,7 @@ export function SubmitPostForm({
 
         {errorMsg && (
           <div className="field-hint field-hint-error" role="alert">
-            {errorMsg}
+            {errorMsg} {loginRequired && <Link href="/login" className="compliance-link">前往登录</Link>}
           </div>
         )}
 
@@ -242,7 +264,7 @@ export function SubmitPostForm({
             title={
               postingEnabled
                 ? "发布帖子"
-                : "AI 审核与人机验证接入前暂未开放发帖"
+                : "发帖暂未开放"
             }
           >
             {!postingEnabled && <Lock size={15} />}

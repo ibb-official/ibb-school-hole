@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { LoginForm } from "@/components/LoginForm";
-import { getPublicSystemStatus } from "@/lib/config";
+import { getPublicSystemStatus, getRuntimeConfig } from "@/lib/config";
 
 export const metadata: Metadata = {
   title: "登录",
@@ -16,6 +16,7 @@ export default function LoginPage() {
       <LoginForm
         authEnabled={status.authEnabled}
         captchaProvider={status.captchaProvider}
+        captchaSiteKey={getRuntimeConfig().captchaSiteKey}
       />
     </div>
   );

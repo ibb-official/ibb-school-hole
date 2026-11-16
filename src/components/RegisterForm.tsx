@@ -2,12 +2,14 @@
 
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import Link from "next/link";
+import { TurnstileWidget } from "@/components/TurnstileWidget";
 import { useRouter } from "next/navigation";
-import { Eye, EyeOff, Lock, ShieldAlert } from "lucide-react";
+import { Eye, EyeOff, Lock } from "lucide-react";
 
 interface RegisterFormProps {
   authEnabled: boolean;
   captchaProvider: string;
+  captchaSiteKey: string;
 }
 
 function evaluatePasswordScore(password: string): number {
@@ -22,10 +24,9 @@ function evaluatePasswordScore(password: string): number {
   return Math.min(score, 4);
 }
 
-export function RegisterForm({ authEnabled, captchaProvider }: RegisterFormProps) {
+export function RegisterForm({ authEnabled, captchaProvider, captchaSiteKey }: RegisterFormProps) {
   const router = useRouter();
   const [username, setUsername] = useState("");
-  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [agreedRules, setAgreedRules] = useState(false);
@@ -36,6 +37,8 @@ export function RegisterForm({ authEnabled, captchaProvider }: RegisterFormProps
   );
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  const [captchaReset, setCaptchaReset] = useState(0);
 
   useEffect(() => {
     if (!authEnabled) return;
@@ -96,10 +99,10 @@ export function RegisterForm({ authEnabled, captchaProvider }: RegisterFormProps
         },
         body: JSON.stringify({
           username,
-          email: email.trim() || null,
           password,
           agreedRules,
           website,
+          captchaToken,
           formIssuedAt: formToken?.issuedAt ?? null,
           formSig: formToken?.sig ?? null,
         }),
@@ -112,11 +115,16 @@ export function RegisterForm({ authEnabled, captchaProvider }: RegisterFormProps
         setErrorMsg(payload.message ?? "注册失败，请检查表单输入。");
         return;
       }
+      window.dispatchEvent(new Event("ibb-auth-change"));
       router.push("/");
       router.refresh();
     } catch {
       setErrorMsg("网络请求失败，请稍后重试。");
     } finally {
+      if (captchaProvider === "turnstile") {
+        setCaptchaToken(null);
+        setCaptchaReset((value) => value + 1);
+      }
       setSubmitting(false);
     }
   }
@@ -125,7 +133,7 @@ export function RegisterForm({ authEnabled, captchaProvider }: RegisterFormProps
     <div className="surface-card form-card">
       <h1 className="form-title">注册校园论坛账号</h1>
       <p className="form-subtitle">
-        仅凭用户名与密码即可完成注册；推荐绑定个人邮箱，用于后续安全提醒与密码找回
+        请使用不含真实身份信息的昵称注册。
       </p>
 
       {!authEnabled && (
@@ -133,7 +141,7 @@ export function RegisterForm({ authEnabled, captchaProvider }: RegisterFormProps
           <Lock size={17} style={{ flexShrink: 0, marginTop: "2px" }} />
           <div>
             <strong>当前暂未开放注册（一期锁定态）</strong>
-            防批量注册限流、蜜罐耗时检测与接口总闸门已全部启用；因人机验证与 AI 审核尚未接入，注册按钮与后端注册接口均保持锁定，暂不创建任何用户。
+            账号功能暂未开放。
           </div>
         </div>
       )}
@@ -172,27 +180,6 @@ export function RegisterForm({ authEnabled, captchaProvider }: RegisterFormProps
               请勿填写真实姓名、学号或“官方/管理员”等容易误导他人的称呼。
             </span>
           )}
-        </div>
-
-        <div className="field-group">
-          <div className="field-label-row">
-            <label htmlFor="reg-email" className="field-label">
-              绑定邮箱
-            </label>
-            <span className="optional-pill">选填 · 推荐绑定</span>
-          </div>
-          <input
-            id="reg-email"
-            type="email"
-            className="text-input"
-            placeholder="name@example.com（不填也可直接注册）"
-            autoComplete="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-          />
-          <span className="field-hint">
-            绑定邮箱不会在站内任何页面公开，仅用于账号找回与异常登录提醒。
-          </span>
         </div>
 
         <div className="field-group">
@@ -255,20 +242,9 @@ export function RegisterForm({ authEnabled, captchaProvider }: RegisterFormProps
           )}
         </div>
 
-        <div className="captcha-slot">
-          <div className="captcha-slot-left">
-            <ShieldAlert size={18} />
-            <div>
-              <div style={{ fontWeight: 600, color: "var(--text-primary)" }}>
-                人机验证模块预留槽位
-              </div>
-              <div style={{ fontSize: "12px" }}>
-                防脚本批量注册组件：{captchaProvider === "disabled" ? "待接入（Turnstile / Altcha）" : captchaProvider}
-              </div>
-            </div>
-          </div>
-          <span className="status-tag status-tag-pending">待接入</span>
-        </div>
+        {authEnabled && captchaProvider === "turnstile" && (
+          <TurnstileWidget siteKey={captchaSiteKey} action="register" onToken={setCaptchaToken} resetCounter={captchaReset} />
+        )}
 
         <label className="checkbox-row">
           <input
@@ -297,8 +273,8 @@ export function RegisterForm({ authEnabled, captchaProvider }: RegisterFormProps
 
         <button
           type="submit"
-          disabled={!authEnabled || submitting}
-          aria-disabled={!authEnabled || submitting}
+          disabled={!authEnabled || submitting || (captchaProvider === "turnstile" && !captchaToken)}
+          aria-disabled={!authEnabled || submitting || (captchaProvider === "turnstile" && !captchaToken)}
           className={`btn btn-lg btn-full btn-primary ${
             !authEnabled ? "btn-locked" : ""
           }`}

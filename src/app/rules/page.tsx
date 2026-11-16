@@ -58,8 +58,7 @@ export default function RulesPage() {
           <li>
             在面向全网的公开页面与 JSON 接口中，匿名帖与匿名回复不会暴露作者用户名与真实用户 ID，而是通过{" "}
             <code className="mono">HMAC-SHA256(post_id + user_id)</code>{" "}
-            生成仅限本帖内有效、跨帖互不关联的匿名代号（如 <code className="mono">洞主</code>、
-            <code className="mono">匿名同学 #7B2A</code>）。
+            生成仅限本帖内有效的匿名代号。请勿在内容中自行披露身份。
           </li>
           <li>
             当内容触发严重违规或违法举报时，站务后台可依据内部记录配合处置账号与清理内容。
@@ -69,7 +68,7 @@ export default function RulesPage() {
         <h2 id="moderation">四、审核、举报与下架流程</h2>
         <p>
           所有发帖与评论均须依次经过 <strong>L1 本地隐私与敏感词即时拦截</strong> 与{" "}
-          <strong>L2 AI 内容语义审核</strong>（接入中）。内容上线后若被举报核实违规，将被立即隐藏或下架处理。
+          <strong>L2 内容审核</strong>。需要人工复核的内容在审核完成前不会公开；已公开内容可通过举报入口交由审核人员处理。
         </p>
 
         <div style={{ marginTop: "24px", display: "flex", gap: "10px", flexWrap: "wrap" }}>

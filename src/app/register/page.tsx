@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { RegisterForm } from "@/components/RegisterForm";
-import { getPublicSystemStatus } from "@/lib/config";
+import { getPublicSystemStatus, getRuntimeConfig } from "@/lib/config";
 
 export const metadata: Metadata = {
   title: "注册账号",
@@ -16,6 +16,7 @@ export default function RegisterPage() {
       <RegisterForm
         authEnabled={status.authEnabled}
         captchaProvider={status.captchaProvider}
+        captchaSiteKey={getRuntimeConfig().captchaSiteKey}
       />
     </div>
   );

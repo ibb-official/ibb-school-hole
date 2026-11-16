@@ -35,7 +35,8 @@ export function issueFormTimingToken(nowMs = Date.now()): FormTimingToken {
 export function verifyAntiBotSignals(
   input: AntiBotSignalsInput
 ): { ok: true } | { ok: false; reason: string; message: string } {
-  if (input.websiteHoneypot && input.websiteHoneypot.trim().length > 0) {
+  if (input.websiteHoneypot != null &&
+      (typeof input.websiteHoneypot !== "string" || input.websiteHoneypot.trim().length > 0)) {
     return {
       ok: false,
       reason: "HONEYPOT_TRIGGERED",

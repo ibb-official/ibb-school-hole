@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { assertFeatureEnabled } from "@/lib/config";
+import { assertPostingEnabled } from "@/lib/forum-status";
 import { getDb } from "@/lib/db";
-import { createComment } from "@/lib/forum-service";
+import { createComment, ServiceError } from "@/lib/forum-service";
 import {
   assertCsrf,
   buildSecurityContext,
@@ -23,7 +23,7 @@ export async function POST(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    assertFeatureEnabled("posting");
+    assertPostingEnabled();
     assertCsrf(request);
     const user = requireAuthenticatedUser(request);
     const { id } = await context.params;
@@ -36,6 +36,11 @@ export async function POST(
     }
 
     const body = await parseJsonBody<CreateCommentBody>(request);
+    if (typeof body.content !== "string" ||
+        (body.isAnonymous !== undefined && typeof body.isAnonymous !== "boolean") ||
+        (body.replyToCommentId != null && (!Number.isSafeInteger(body.replyToCommentId) || body.replyToCommentId <= 0))) {
+      throw new ServiceError("INVALID_INPUT", 400, "回复内容格式无效。");
+    }
     const ctx = buildSecurityContext(request);
     const result = await createComment(
       getDb(),
@@ -43,7 +48,7 @@ export async function POST(
       postId,
       {
         content: body.content ?? "",
-        isAnonymous: Boolean(body.isAnonymous),
+        isAnonymous: body.isAnonymous ?? false,
         replyToCommentId: body.replyToCommentId ?? null,
       },
       ctx

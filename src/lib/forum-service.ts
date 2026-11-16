@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type Database from "better-sqlite3";
 import { getCategoryBySlug, REPORT_REASONS } from "@/data/categories";
 import {
+  buildAnonymousAliases,
   serializeCommentDto,
   serializePostDto,
   type CommentRowForDto,
@@ -9,7 +10,8 @@ import {
   type PublicCommentDto,
   type PublicPostDto,
 } from "@/lib/anonymous";
-import { getRuntimeConfig } from "@/lib/config";
+import { FeatureLockedError, getRuntimeConfig } from "@/lib/config";
+import { hasActiveModerator } from "@/lib/forum-status";
 import {
   runModerationPipeline,
 } from "@/lib/moderation/pipeline";
@@ -27,13 +29,11 @@ import {
   verifyPassword,
 } from "@/lib/security/password";
 import {
-  calculateAccountLockoutMs,
   clearRateLimitBucket,
   consumeRateLimit,
   RATE_LIMIT_POLICIES,
 } from "@/lib/security/rate-limit";
 import {
-  validateOptionalEmail,
   validateUsername,
 } from "@/lib/security/validation";
 
@@ -61,6 +61,7 @@ export class ServiceError extends Error {
 export interface RequestSecurityContext {
   ipHash: string;
   userAgentHash: string;
+  sessionTokenHash?: string;
   nowMs?: number;
 }
 
@@ -92,6 +93,27 @@ interface UserRow {
 
 export function hashSessionToken(rawToken: string): string {
   return crypto.createHash("sha256").update(rawToken).digest("hex");
+}
+
+/** HTTP write paths include the session hash so revocation is checked at commit. */
+export function assertRequestSessionActive(
+  db: Database.Database,
+  userId: number,
+  ctx: RequestSecurityContext
+): void {
+  if (!ctx.sessionTokenHash) return;
+  const active = db.prepare(`
+    SELECT 1 FROM sessions s JOIN users u ON u.id = s.user_id
+    WHERE s.token_hash = ? AND s.user_id = ? AND s.revoked_at IS NULL
+      AND s.expires_at > ? AND u.status = 'active'
+  `).get(ctx.sessionTokenHash, userId, ctx.nowMs ?? Date.now());
+  if (!active) throw new ServiceError("UNAUTHORIZED", 401, "登录状态已失效，请重新登录。");
+}
+
+function assertModerationStaffAvailable(db: Database.Database): void {
+  if (getRuntimeConfig().isProduction && !hasActiveModerator(db)) {
+    throw new FeatureLockedError("posting", "尚未配置审核员，发帖与评论暂未开放。");
+  }
 }
 
 function toPublicUserDto(row: UserRow): PublicUserDto {
@@ -144,6 +166,17 @@ export async function registerUser(
   ctx: RequestSecurityContext
 ): Promise<{ user: PublicUserDto; rawSessionToken: string; expiresAt: number }> {
   const now = ctx.nowMs ?? Date.now();
+  // 所有尝试先经过廉价 IP 限流；成功注册配额在创建账号的事务中计算。
+  const attempts = consumeRateLimit(db, {
+    key: `reg:attempts:ip:${ctx.ipHash}`,
+    ...RATE_LIMIT_POLICIES.REGISTER_IP_ATTEMPTS,
+    nowMs: now,
+  });
+  if (!attempts.allowed) {
+    throw new ServiceError("RATE_LIMITED", 429, "注册尝试过于频繁，请稍后再试。", {
+      retryAfterSeconds: attempts.retryAfterSeconds,
+    });
+  }
 
   const antiBot = verifyAntiBotSignals({
     websiteHoneypot: input.websiteHoneypot,
@@ -152,163 +185,63 @@ export async function registerUser(
     nowMs: now,
   });
   if (!antiBot.ok) {
-    recordSecurityAudit(db, {
-      eventType: "auth.register",
-      ipHash: ctx.ipHash,
-      outcome: "deny",
-      detail: antiBot.reason,
-      createdAt: now,
-    });
+    recordSecurityAudit(db, { eventType: "auth.register", ipHash: ctx.ipHash, outcome: "deny", detail: antiBot.reason, createdAt: now });
     throw new ServiceError(antiBot.reason, 400, antiBot.message);
   }
+  if (input.agreedRules !== true) {
+    throw new ServiceError("RULES_NOT_ACCEPTED", 400, "请先阅读并同意《社区公约》与《免责声明》。");
+  }
+  if (input.email) {
+    throw new ServiceError("EMAIL_NOT_SUPPORTED", 400, "暂不支持绑定邮箱，请使用用户名注册。");
+  }
+  if (typeof input.username !== "string" || typeof input.password !== "string") {
+    throw new ServiceError("INVALID_INPUT", 400, "请输入有效的用户名和密码。");
+  }
+  const usernameCheck = validateUsername(input.username);
+  if (!usernameCheck.ok) throw new ServiceError("INVALID_USERNAME", 400, usernameCheck.error);
+  const passwordCheck = validatePasswordStrength(input.password, usernameCheck.username);
+  if (!passwordCheck.ok) throw new ServiceError("WEAK_PASSWORD", 400, passwordCheck.error);
 
-  const captcha = await verifyCaptchaToken(input.captchaToken, ctx.ipHash);
+  const captcha = await verifyCaptchaToken(input.captchaToken, ctx.ipHash, "register");
   if (!captcha.ok) {
-    recordSecurityAudit(db, {
-      eventType: "auth.register",
-      ipHash: ctx.ipHash,
-      outcome: "deny",
-      detail: `CAPTCHA_FAILED:${captcha.provider}`,
-      createdAt: now,
-    });
-    throw new ServiceError(
-      "CAPTCHA_FAILED",
-      400,
-      captcha.error ?? "人机验证未通过。"
-    );
-  }
-
-  const hourlyLimit = consumeRateLimit(db, {
-    key: `reg:ip:1h:${ctx.ipHash}`,
-    limit: RATE_LIMIT_POLICIES.REGISTER_IP_HOURLY.limit,
-    windowMs: RATE_LIMIT_POLICIES.REGISTER_IP_HOURLY.windowMs,
-    nowMs: now,
-  });
-  if (!hourlyLimit.allowed) {
-    recordSecurityAudit(db, {
-      eventType: "auth.register",
-      ipHash: ctx.ipHash,
-      outcome: "deny",
-      detail: "REGISTER_IP_HOURLY_EXCEEDED",
-      createdAt: now,
-    });
-    throw new ServiceError(
-      "RATE_LIMITED",
-      429,
-      "当前网络近期注册过于频繁，请稍后再试。",
-      { retryAfterSeconds: hourlyLimit.retryAfterSeconds }
-    );
-  }
-
-  const dailyLimit = consumeRateLimit(db, {
-    key: `reg:ip:24h:${ctx.ipHash}`,
-    limit: RATE_LIMIT_POLICIES.REGISTER_IP_DAILY.limit,
-    windowMs: RATE_LIMIT_POLICIES.REGISTER_IP_DAILY.windowMs,
-    nowMs: now,
-  });
-  if (!dailyLimit.allowed) {
-    recordSecurityAudit(db, {
-      eventType: "auth.register",
-      ipHash: ctx.ipHash,
-      outcome: "deny",
-      detail: "REGISTER_IP_DAILY_EXCEEDED",
-      createdAt: now,
-    });
-    throw new ServiceError(
-      "RATE_LIMITED",
-      429,
-      "同一网络 24 小时内注册次数已达上限。",
-      { retryAfterSeconds: dailyLimit.retryAfterSeconds }
-    );
-  }
-
-  if (!input.agreedRules) {
-    throw new ServiceError(
-      "RULES_NOT_ACCEPTED",
-      400,
-      "请先阅读并同意《社区公约》与《免责声明》。"
-    );
-  }
-
-  const usernameCheck = validateUsername(input.username ?? "");
-  if (!usernameCheck.ok) {
-    throw new ServiceError("INVALID_USERNAME", 400, usernameCheck.error);
-  }
-
-  const emailCheck = validateOptionalEmail(input.email);
-  if (!emailCheck.ok) {
-    throw new ServiceError("INVALID_EMAIL", 400, emailCheck.error);
-  }
-
-  const passwordCheck = validatePasswordStrength(
-    input.password ?? "",
-    usernameCheck.username
-  );
-  if (!passwordCheck.ok) {
-    throw new ServiceError("WEAK_PASSWORD", 400, passwordCheck.error);
-  }
-
-  const existingUsername = db
-    .prepare("SELECT id FROM users WHERE username_normalized = ?")
-    .get(usernameCheck.normalized) as { id: number } | undefined;
-  if (existingUsername) {
-    throw new ServiceError("USERNAME_TAKEN", 409, "该用户名已被注册，请换一个。");
-  }
-
-  if (emailCheck.email) {
-    const existingEmail = db
-      .prepare("SELECT id FROM users WHERE email = ?")
-      .get(emailCheck.email) as { id: number } | undefined;
-    if (existingEmail) {
-      throw new ServiceError(
-        "EMAIL_TAKEN",
-        409,
-        "该绑定邮箱已被其他账号使用。"
-      );
-    }
+    recordSecurityAudit(db, { eventType: "auth.register", ipHash: ctx.ipHash, outcome: "deny", detail: `CAPTCHA_FAILED:${captcha.provider}`, createdAt: now });
+    throw new ServiceError("CAPTCHA_FAILED", 400, captcha.error ?? "人机验证未通过。");
   }
 
   const passwordHash = await hashPassword(input.password);
-
-  const insertResult = db
-    .prepare(
-      `
-      INSERT INTO users (
-        username, username_normalized, email, password_hash,
-        role, status, trust_level, failed_login_count, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, 'user', 'active', 0, 0, ?, ?)
-      `
-    )
-    .run(
-      usernameCheck.username,
-      usernameCheck.normalized,
-      emailCheck.email,
-      passwordHash,
-      now,
-      now
-    );
-
-  const userId = Number(insertResult.lastInsertRowid);
-  const createdUser = db
-    .prepare("SELECT * FROM users WHERE id = ?")
-    .get(userId) as UserRow;
-
-  const session = createSessionRecord(db, userId, ctx);
-  recordSecurityAudit(db, {
-    eventType: "auth.register",
-    actorUserId: userId,
-    ipHash: ctx.ipHash,
-    target: `user:${userId}`,
-    outcome: "allow",
-    detail: emailCheck.email ? "with_email" : "username_only",
-    createdAt: now,
-  });
-
-  return {
-    user: toPublicUserDto(createdUser),
-    rawSessionToken: session.rawSessionToken,
-    expiresAt: session.expiresAt,
-  };
+  try {
+    return db.transaction(() => {
+      if (db.prepare("SELECT id FROM users WHERE username_normalized = ?").get(usernameCheck.normalized)) {
+        throw new ServiceError("USERNAME_TAKEN", 409, "该用户名不可用，请换一个。");
+      }
+      for (const [suffix, policy] of [
+        ["1h", RATE_LIMIT_POLICIES.REGISTER_IP_HOURLY],
+        ["24h", RATE_LIMIT_POLICIES.REGISTER_IP_DAILY],
+      ] as const) {
+        const limit = consumeRateLimit(db, { key: `reg:success:ip:${suffix}:${ctx.ipHash}`, ...policy, nowMs: now });
+        if (!limit.allowed) {
+          throw new ServiceError("RATE_LIMITED", 429, "当前网络注册次数已达上限，请稍后再试。", {
+            retryAfterSeconds: limit.retryAfterSeconds,
+          });
+        }
+      }
+      const insert = db.prepare(`
+        INSERT INTO users (username, username_normalized, email, password_hash,
+          role, status, trust_level, failed_login_count, created_at, updated_at)
+        VALUES (?, ?, NULL, ?, 'user', 'active', 0, 0, ?, ?)
+      `).run(usernameCheck.username, usernameCheck.normalized, passwordHash, now, now);
+      const userId = Number(insert.lastInsertRowid);
+      const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId) as UserRow;
+      const session = createSessionRecord(db, userId, ctx);
+      recordSecurityAudit(db, { eventType: "auth.register", actorUserId: userId, ipHash: ctx.ipHash, target: `user:${userId}`, outcome: "allow", createdAt: now });
+      return { user: toPublicUserDto(user), ...session };
+    })();
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "SQLITE_CONSTRAINT_UNIQUE") {
+      throw new ServiceError("USERNAME_TAKEN", 409, "该用户名不可用，请换一个。");
+    }
+    throw error;
+  }
 }
 
 export async function authenticateUser(
@@ -324,7 +257,10 @@ export async function authenticateUser(
   ctx: RequestSecurityContext
 ): Promise<{ user: PublicUserDto; rawSessionToken: string; expiresAt: number }> {
   const now = ctx.nowMs ?? Date.now();
-
+  const ipLimit = consumeRateLimit(db, { key: `login:ip:${ctx.ipHash}`, ...RATE_LIMIT_POLICIES.LOGIN_IP, nowMs: now });
+  if (!ipLimit.allowed) {
+    throw new ServiceError("RATE_LIMITED", 429, "登录尝试过于频繁，请稍后再试。", { retryAfterSeconds: ipLimit.retryAfterSeconds });
+  }
   const antiBot = verifyAntiBotSignals({
     websiteHoneypot: input.websiteHoneypot,
     formIssuedAt: input.formIssuedAt,
@@ -333,212 +269,55 @@ export async function authenticateUser(
     minElapsedMs: 1000,
   });
   if (!antiBot.ok) {
-    recordSecurityAudit(db, {
-      eventType: "auth.login",
-      ipHash: ctx.ipHash,
-      outcome: "deny",
-      detail: antiBot.reason,
-      createdAt: now,
-    });
+    recordSecurityAudit(db, { eventType: "auth.login", ipHash: ctx.ipHash, outcome: "deny", detail: antiBot.reason, createdAt: now });
     throw new ServiceError(antiBot.reason, 400, antiBot.message);
   }
-
-  const captcha = await verifyCaptchaToken(input.captchaToken, ctx.ipHash);
-  if (!captcha.ok) {
-    recordSecurityAudit(db, {
-      eventType: "auth.login",
-      ipHash: ctx.ipHash,
-      outcome: "deny",
-      detail: `CAPTCHA_FAILED:${captcha.provider}`,
-      createdAt: now,
-    });
-    throw new ServiceError(
-      "CAPTCHA_FAILED",
-      400,
-      captcha.error ?? "人机验证未通过。"
-    );
+  if (typeof input.identifier !== "string" || input.identifier.length > 120 ||
+      typeof input.password !== "string" || input.password.length > 72) {
+    throw new ServiceError("INVALID_CREDENTIALS", 401, "用户名或密码错误。");
   }
-
-  const ipLimit = consumeRateLimit(db, {
-    key: `login:ip:${ctx.ipHash}`,
-    limit: RATE_LIMIT_POLICIES.LOGIN_IP.limit,
-    windowMs: RATE_LIMIT_POLICIES.LOGIN_IP.windowMs,
-    nowMs: now,
-  });
-  if (!ipLimit.allowed) {
-    recordSecurityAudit(db, {
-      eventType: "auth.login",
-      ipHash: ctx.ipHash,
-      outcome: "locked",
-      detail: "LOGIN_IP_RATE_LIMITED",
-      createdAt: now,
-    });
-    throw new ServiceError(
-      "RATE_LIMITED",
-      429,
-      "登录尝试过于频繁，请稍后再试。",
-      { retryAfterSeconds: ipLimit.retryAfterSeconds }
-    );
-  }
-
-  const normalizedId = (input.identifier ?? "").trim().toLowerCase();
-  if (!normalizedId) {
-    throw new ServiceError("INVALID_INPUT", 400, "请输入用户名或已绑定邮箱。");
-  }
-
-  const accountKey = `login:account:${normalizedId}`;
-  const accountLimit = consumeRateLimit(db, {
-    key: accountKey,
-    limit: RATE_LIMIT_POLICIES.LOGIN_ACCOUNT.limit,
-    windowMs: RATE_LIMIT_POLICIES.LOGIN_ACCOUNT.windowMs,
-    nowMs: now,
-  });
+  const normalizedId = input.identifier.trim().toLowerCase();
+  if (!normalizedId) throw new ServiceError("INVALID_INPUT", 400, "请输入用户名。");
+  const idHash = crypto.createHmac("sha256", getRuntimeConfig().ipHashSalt).update(`login:${normalizedId}`).digest("hex");
+  // 登录限制按账号和来源组合，避免单个攻击者通过少量错误尝试锁住全网用户。
+  const accountKey = `login:account-ip:${idHash}:${ctx.ipHash}`;
+  const accountLimit = consumeRateLimit(db, { key: accountKey, ...RATE_LIMIT_POLICIES.LOGIN_ACCOUNT, nowMs: now });
   if (!accountLimit.allowed) {
-    recordSecurityAudit(db, {
-      eventType: "auth.login",
-      ipHash: ctx.ipHash,
-      target: normalizedId,
-      outcome: "locked",
-      detail: "LOGIN_ACCOUNT_BUCKET_EXCEEDED",
-      createdAt: now,
-    });
-    throw new ServiceError(
-      "ACCOUNT_RATE_LIMITED",
-      429,
-      "该账号近期登录尝试次数过多，请稍后再试。",
-      { retryAfterSeconds: accountLimit.retryAfterSeconds }
-    );
+    throw new ServiceError("RATE_LIMITED", 429, "登录尝试过于频繁，请稍后再试。", { retryAfterSeconds: accountLimit.retryAfterSeconds });
   }
-
-  const user = db
-    .prepare(
-      `
-      SELECT * FROM users
-      WHERE username_normalized = ? OR email = ?
-      LIMIT 1
-      `
-    )
-    .get(normalizedId, normalizedId) as UserRow | undefined;
-
-  if (!user) {
-    await verifyDummyPassword(input.password ?? "");
-    recordSecurityAudit(db, {
-      eventType: "auth.login",
-      ipHash: ctx.ipHash,
-      target: normalizedId,
-      outcome: "deny",
-      detail: "USER_NOT_FOUND",
-      createdAt: now,
-    });
-    throw new ServiceError(
-      "INVALID_CREDENTIALS",
-      401,
-      "用户名/邮箱或密码错误。"
-    );
+  const captcha = await verifyCaptchaToken(input.captchaToken, ctx.ipHash, "login");
+  if (!captcha.ok) {
+    recordSecurityAudit(db, { eventType: "auth.login", ipHash: ctx.ipHash, outcome: "deny", detail: `CAPTCHA_FAILED:${captcha.provider}`, createdAt: now });
+    throw new ServiceError("CAPTCHA_FAILED", 400, captcha.error ?? "人机验证未通过。");
   }
-
-  if (user.locked_until && user.locked_until > now) {
-    const retryAfterSeconds = Math.max(
-      1,
-      Math.ceil((user.locked_until - now) / 1000)
-    );
-    recordSecurityAudit(db, {
-      eventType: "auth.login",
-      actorUserId: user.id,
-      ipHash: ctx.ipHash,
-      outcome: "locked",
-      detail: `ACCOUNT_LOCKED_UNTIL:${user.locked_until}`,
-      createdAt: now,
-    });
-    throw new ServiceError(
-      "ACCOUNT_LOCKED",
-      429,
-      `连续密码错误次数过多，账号已暂时锁定，请 ${retryAfterSeconds} 秒后再试。`,
-      { retryAfterSeconds }
-    );
+  const user = db.prepare("SELECT * FROM users WHERE username_normalized = ? LIMIT 1").get(normalizedId) as UserRow | undefined;
+  if (!user || user.status !== "active") {
+    await verifyDummyPassword(input.password);
+    recordSecurityAudit(db, { eventType: "auth.login", ipHash: ctx.ipHash, outcome: "deny", detail: "INVALID_CREDENTIALS", createdAt: now });
+    throw new ServiceError("INVALID_CREDENTIALS", 401, "用户名或密码错误。");
   }
-
-  if (user.status !== "active") {
-    await verifyDummyPassword(input.password ?? "");
-    recordSecurityAudit(db, {
-      eventType: "auth.login",
-      actorUserId: user.id,
-      ipHash: ctx.ipHash,
-      outcome: "deny",
-      detail: `USER_STATUS:${user.status}`,
-      createdAt: now,
-    });
-    throw new ServiceError(
-      "ACCOUNT_DISABLED",
-      403,
-      "该账号当前处于封禁或停用状态。"
-    );
-  }
-
-  const valid = await verifyPassword(input.password ?? "", user.password_hash);
+  const valid = await verifyPassword(input.password, user.password_hash);
   if (!valid) {
-    const nextFailedCount = user.failed_login_count + 1;
-    const lockDurationMs = calculateAccountLockoutMs(nextFailedCount);
-    const lockedUntil = lockDurationMs > 0 ? now + lockDurationMs : null;
-
-    db.prepare(
-      `
-      UPDATE users
-      SET failed_login_count = ?, locked_until = ?, updated_at = ?
-      WHERE id = ?
-      `
-    ).run(nextFailedCount, lockedUntil, now, user.id);
-
-    recordSecurityAudit(db, {
-      eventType: "auth.login",
-      actorUserId: user.id,
-      ipHash: ctx.ipHash,
-      outcome: lockedUntil ? "locked" : "deny",
-      detail: `WRONG_PASSWORD:count=${nextFailedCount}`,
-      createdAt: now,
-    });
-
-    if (lockedUntil) {
-      const retryAfterSeconds = Math.ceil(lockDurationMs / 1000);
-      throw new ServiceError(
-        "ACCOUNT_LOCKED",
-        429,
-        `连续密码错误 ${nextFailedCount} 次，为防止暴力破解，账号已临时锁定 ${retryAfterSeconds} 秒。`,
-        { retryAfterSeconds }
-      );
-    }
-
-    throw new ServiceError(
-      "INVALID_CREDENTIALS",
-      401,
-      "用户名/邮箱或密码错误。"
-    );
+    // 原子递增，避免多次并发验证覆盖彼此的失败次数。
+    const updated = db.prepare(`
+      UPDATE users SET failed_login_count = failed_login_count + 1, updated_at = ?
+      WHERE id = ? RETURNING failed_login_count
+    `).get(now, user.id) as { failed_login_count: number };
+    recordSecurityAudit(db, { eventType: "auth.login", actorUserId: user.id, ipHash: ctx.ipHash, outcome: "deny", detail: `WRONG_PASSWORD:count=${updated.failed_login_count}`, createdAt: now });
+    throw new ServiceError("INVALID_CREDENTIALS", 401, "用户名或密码错误。");
   }
-
-  db.prepare(
-    `
-    UPDATE users
-    SET failed_login_count = 0, locked_until = NULL, last_login_at = ?, updated_at = ?
-    WHERE id = ?
-    `
-  ).run(now, now, user.id);
-  clearRateLimitBucket(db, accountKey);
-
-  const session = createSessionRecord(db, user.id, ctx);
-  recordSecurityAudit(db, {
-    eventType: "auth.login",
-    actorUserId: user.id,
-    ipHash: ctx.ipHash,
-    outcome: "allow",
-    detail: "LOGIN_SUCCESS",
-    createdAt: now,
+  const finishLogin = db.transaction(() => {
+    // An administrator may suspend the account while scrypt runs asynchronously.
+    const current = db.prepare("SELECT * FROM users WHERE id = ? AND status = 'active' AND password_hash = ?")
+      .get(user.id, user.password_hash) as UserRow | undefined;
+    if (!current) throw new ServiceError("INVALID_CREDENTIALS", 401, "用户名或密码错误。");
+    db.prepare("UPDATE users SET failed_login_count = 0, locked_until = NULL, last_login_at = ?, updated_at = ? WHERE id = ?").run(now, now, user.id);
+    clearRateLimitBucket(db, accountKey);
+    const session = createSessionRecord(db, user.id, ctx);
+    recordSecurityAudit(db, { eventType: "auth.login", actorUserId: user.id, ipHash: ctx.ipHash, outcome: "allow", detail: "LOGIN_SUCCESS", createdAt: now });
+    return { user: toPublicUserDto(current), ...session };
   });
-
-  return {
-    user: toPublicUserDto(user),
-    rawSessionToken: session.rawSessionToken,
-    expiresAt: session.expiresAt,
-  };
+  return finishLogin.immediate();
 }
 
 export function getSessionUser(
@@ -594,8 +373,10 @@ export function listPosts(
     offset?: number;
   }
 ): { items: PublicPostDto[]; total: number } {
-  const limit = Math.min(Math.max(options?.limit ?? 20, 1), 50);
-  const offset = Math.max(options?.offset ?? 0, 0);
+  const requestedLimit = options?.limit;
+  const requestedOffset = options?.offset;
+  const limit = Math.min(Math.max(typeof requestedLimit === "number" && Number.isSafeInteger(requestedLimit) ? requestedLimit : 20, 1), 50);
+  const offset = Math.max(typeof requestedOffset === "number" && Number.isSafeInteger(requestedOffset) ? requestedOffset : 0, 0);
 
   const whereClauses = ["p.moderation_status = 'published'"];
   const params: Array<string | number> = [];
@@ -656,6 +437,21 @@ export function listPosts(
     items: rows.map(serializePostDto),
     total: countRow.cnt,
   };
+}
+
+function getPostAnonymousAliases(
+  db: Database.Database,
+  postId: number,
+  postAuthorId: number,
+  postIsAnonymous: boolean
+): Map<number, string> {
+  // Include non-public comments so moderation does not change existing aliases.
+  const authors = db.prepare(`
+    SELECT author_id FROM comments
+    WHERE post_id = ? AND is_anonymous = 1
+    GROUP BY author_id ORDER BY MIN(id) ASC
+  `).all(postId) as Array<{ author_id: number }>;
+  return buildAnonymousAliases(postId, postAuthorId, postIsAnonymous, authors.map((row) => row.author_id));
 }
 
 export function getPostDetail(
@@ -729,9 +525,11 @@ export function getPostDetail(
     )
     .all(postId) as CommentRowForDto[];
 
+  const postIsAnonymous = row.is_anonymous === 1;
+  const aliases = getPostAnonymousAliases(db, postId, row.author_id, postIsAnonymous);
   return {
     post: serializePostDto(row),
-    comments: commentRows.map((c) => serializeCommentDto(c, row.author_id)),
+    comments: commentRows.map((c) => serializeCommentDto(c, row.author_id, postIsAnonymous, aliases)),
   };
 }
 
@@ -782,38 +580,6 @@ export async function createPost(
     );
   }
 
-  const intervalLimit = consumeRateLimit(db, {
-    key: `post:interval:user:${user.id}`,
-    limit: RATE_LIMIT_POLICIES.POST_INTERVAL.limit,
-    windowMs: RATE_LIMIT_POLICIES.POST_INTERVAL.windowMs,
-    nowMs: now,
-  });
-  if (!intervalLimit.allowed) {
-    throw new ServiceError(
-      "RATE_LIMITED",
-      429,
-      `发帖间隔过短，请在 ${intervalLimit.retryAfterSeconds} 秒后再试。`,
-      { retryAfterSeconds: intervalLimit.retryAfterSeconds }
-    );
-  }
-
-  if (user.trustLevel === 0) {
-    const dayAgo = now - 24 * 60 * 60 * 1000;
-    const dailyCount = db
-      .prepare(
-        "SELECT COUNT(*) AS cnt FROM posts WHERE author_id = ? AND created_at >= ?"
-      )
-      .get(user.id, dayAgo) as { cnt: number };
-
-    if (dailyCount.cnt >= RATE_LIMIT_POLICIES.NEW_USER_DAILY_POST_LIMIT) {
-      throw new ServiceError(
-        "DAILY_POST_LIMIT",
-        429,
-        `新手账号 24 小时内最多发布 ${RATE_LIMIT_POLICIES.NEW_USER_DAILY_POST_LIMIT} 篇主题帖。`
-      );
-    }
-  }
-
   const normalizedTitle = normalizePlainText(input.title ?? "").replace(/\n+/g, " ");
   const normalizedContent = normalizePlainText(input.content ?? "");
 
@@ -831,6 +597,13 @@ export async function createPost(
       400,
       "帖子正文长度需在 10 至 8000 个字符之间。"
     );
+  }
+
+  const attempt = consumeRateLimit(db, {
+    key: `post:attempts:user:${user.id}`, ...RATE_LIMIT_POLICIES.POST_ATTEMPTS, nowMs: now,
+  });
+  if (!attempt.allowed) {
+    throw new ServiceError("RATE_LIMITED", 429, "发帖尝试过于频繁，请稍后再试。", { retryAfterSeconds: attempt.retryAfterSeconds });
   }
 
   const moderation = await runModerationPipeline({
@@ -857,8 +630,32 @@ export async function createPost(
   const moderationStatus =
     moderation.action === "pending_review" ? "pending_review" : "published";
 
-  const res = db
-    .prepare(
+  const insertPost = db.transaction(() => {
+    assertRequestSessionActive(db, user.id, ctx);
+    assertModerationStaffAvailable(db);
+    const current = db.prepare("SELECT status, trust_level FROM users WHERE id = ?").get(user.id) as
+      | { status: string; trust_level: number }
+      | undefined;
+    if (!current || current.status !== "active") {
+      throw new ServiceError("UNAUTHORIZED", 401, "账号当前不可发布内容。");
+    }
+    if (current.trust_level < category.minTrustLevel) {
+      throw new ServiceError("INSUFFICIENT_TRUST", 403, "当前账号无法在该板块发帖。");
+    }
+    const interval = consumeRateLimit(db, {
+      key: `post:interval:user:${user.id}`, ...RATE_LIMIT_POLICIES.POST_INTERVAL, nowMs: now,
+    });
+    if (!interval.allowed) {
+      throw new ServiceError("RATE_LIMITED", 429, `发帖间隔过短，请在 ${interval.retryAfterSeconds} 秒后再试。`, { retryAfterSeconds: interval.retryAfterSeconds });
+    }
+    if (current.trust_level === 0) {
+      const count = db.prepare("SELECT COUNT(*) AS cnt FROM posts WHERE author_id = ? AND created_at >= ?")
+        .get(user.id, now - 24 * 60 * 60 * 1000) as { cnt: number };
+      if (count.cnt >= RATE_LIMIT_POLICIES.NEW_USER_DAILY_POST_LIMIT) {
+        throw new ServiceError("DAILY_POST_LIMIT", 429, `新手账号 24 小时内最多发布 ${RATE_LIMIT_POLICIES.NEW_USER_DAILY_POST_LIMIT} 篇主题帖。`);
+      }
+    }
+    return db.prepare(
       `
       INSERT INTO posts (
         category_slug, author_id, title, content, is_anonymous,
@@ -879,6 +676,8 @@ export async function createPost(
       now,
       now
     );
+  });
+  const res = insertPost.immediate();
 
   const postId = Number(res.lastInsertRowid);
   const inserted = db
@@ -939,13 +738,14 @@ export async function createComment(
   const now = ctx.nowMs ?? Date.now();
   const postRow = db
     .prepare(
-      "SELECT id, category_slug, author_id, moderation_status FROM posts WHERE id = ? LIMIT 1"
+      "SELECT id, category_slug, author_id, is_anonymous, moderation_status FROM posts WHERE id = ? LIMIT 1"
     )
     .get(postId) as
     | {
         id: number;
         category_slug: string;
         author_id: number;
+        is_anonymous: number;
         moderation_status: string;
       }
     | undefined;
@@ -965,36 +765,6 @@ export async function createComment(
   }
   const isAnonymous = Boolean(input.isAnonymous) && allowAnon;
 
-  const intervalLimit = consumeRateLimit(db, {
-    key: `comment:interval:user:${user.id}`,
-    limit: RATE_LIMIT_POLICIES.COMMENT_INTERVAL.limit,
-    windowMs: RATE_LIMIT_POLICIES.COMMENT_INTERVAL.windowMs,
-    nowMs: now,
-  });
-  if (!intervalLimit.allowed) {
-    throw new ServiceError(
-      "RATE_LIMITED",
-      429,
-      `回复频率过快，请在 ${intervalLimit.retryAfterSeconds} 秒后再试。`,
-      { retryAfterSeconds: intervalLimit.retryAfterSeconds }
-    );
-  }
-
-  const hourlyLimit = consumeRateLimit(db, {
-    key: `comment:hourly:user:${user.id}`,
-    limit: RATE_LIMIT_POLICIES.COMMENT_HOURLY.limit,
-    windowMs: RATE_LIMIT_POLICIES.COMMENT_HOURLY.windowMs,
-    nowMs: now,
-  });
-  if (!hourlyLimit.allowed) {
-    throw new ServiceError(
-      "RATE_LIMITED",
-      429,
-      "当前小时内评论数量已达上限，请稍后再试。",
-      { retryAfterSeconds: hourlyLimit.retryAfterSeconds }
-    );
-  }
-
   const normalizedContent = normalizePlainText(input.content ?? "");
   if ([...normalizedContent].length < 2 || [...normalizedContent].length > 2000) {
     throw new ServiceError(
@@ -1007,7 +777,7 @@ export async function createComment(
   let replyToId: number | null = null;
   if (input.replyToCommentId) {
     const parentComment = db
-      .prepare("SELECT id FROM comments WHERE id = ? AND post_id = ? LIMIT 1")
+      .prepare("SELECT id FROM comments WHERE id = ? AND post_id = ? AND moderation_status = 'published' LIMIT 1")
       .get(input.replyToCommentId, postId) as { id: number } | undefined;
     if (!parentComment) {
       throw new ServiceError(
@@ -1017,6 +787,13 @@ export async function createComment(
       );
     }
     replyToId = parentComment.id;
+  }
+
+  const attempt = consumeRateLimit(db, {
+    key: `comment:attempts:user:${user.id}`, ...RATE_LIMIT_POLICIES.COMMENT_ATTEMPTS, nowMs: now,
+  });
+  if (!attempt.allowed) {
+    throw new ServiceError("RATE_LIMITED", 429, "回复尝试过于频繁，请稍后再试。", { retryAfterSeconds: attempt.retryAfterSeconds });
   }
 
   const moderation = await runModerationPipeline({
@@ -1044,6 +821,27 @@ export async function createComment(
     moderation.action === "pending_review" ? "pending_review" : "published";
 
   const insertTx = db.transaction(() => {
+    assertRequestSessionActive(db, user.id, ctx);
+    assertModerationStaffAvailable(db);
+    const activeUser = db.prepare("SELECT 1 FROM users WHERE id = ? AND status = 'active'").get(user.id);
+    if (!activeUser) throw new ServiceError("UNAUTHORIZED", 401, "账号当前不可发布内容。");
+    const publishedPost = db.prepare("SELECT 1 FROM posts WHERE id = ? AND moderation_status = 'published'").get(postId);
+    if (!publishedPost) throw new ServiceError("POST_NOT_FOUND", 404, "目标帖子不存在或未处于公开状态。");
+    if (replyToId && !db.prepare("SELECT 1 FROM comments WHERE id = ? AND post_id = ? AND moderation_status = 'published'").get(replyToId, postId)) {
+      throw new ServiceError("INVALID_REPLY_TARGET", 400, "引用的目标楼层不存在。");
+    }
+    const interval = consumeRateLimit(db, {
+      key: `comment:interval:user:${user.id}`, ...RATE_LIMIT_POLICIES.COMMENT_INTERVAL, nowMs: now,
+    });
+    if (!interval.allowed) {
+      throw new ServiceError("RATE_LIMITED", 429, `回复频率过快，请在 ${interval.retryAfterSeconds} 秒后再试。`, { retryAfterSeconds: interval.retryAfterSeconds });
+    }
+    const hourly = consumeRateLimit(db, {
+      key: `comment:hourly:user:${user.id}`, ...RATE_LIMIT_POLICIES.COMMENT_HOURLY, nowMs: now,
+    });
+    if (!hourly.allowed) {
+      throw new ServiceError("RATE_LIMITED", 429, "当前小时内评论数量已达上限，请稍后再试。", { retryAfterSeconds: hourly.retryAfterSeconds });
+    }
     const maxFloorRow = db
       .prepare(
         "SELECT COALESCE(MAX(floor_no), 0) AS max_floor FROM comments WHERE post_id = ?"
@@ -1087,7 +885,7 @@ export async function createComment(
     return Number(res.lastInsertRowid);
   });
 
-  const commentId = insertTx();
+  const commentId = insertTx.immediate();
   const insertedRow = db
     .prepare(
       `
@@ -1109,8 +907,10 @@ export async function createComment(
     )
     .get(commentId) as CommentRowForDto;
 
+  const postIsAnonymous = postRow.is_anonymous === 1;
+  const aliases = getPostAnonymousAliases(db, postId, postRow.author_id, postIsAnonymous);
   return {
-    comment: serializeCommentDto(insertedRow, postRow.author_id),
+    comment: serializeCommentDto(insertedRow, postRow.author_id, postIsAnonymous, aliases),
     moderationAction: moderation.action,
   };
 }
@@ -1207,7 +1007,8 @@ export function getForumStats(db: Database.Database): {
     .prepare("SELECT COUNT(*) AS cnt FROM posts WHERE moderation_status = 'published'")
     .get() as { cnt: number };
   const commentRow = db
-    .prepare("SELECT COUNT(*) AS cnt FROM comments WHERE moderation_status = 'published'")
+    .prepare(`SELECT COUNT(*) AS cnt FROM comments cm JOIN posts p ON p.id = cm.post_id
+      WHERE cm.moderation_status = 'published' AND p.moderation_status = 'published'`)
     .get() as { cnt: number };
 
   const catRows = db

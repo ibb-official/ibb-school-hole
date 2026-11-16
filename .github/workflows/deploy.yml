@@ -12,7 +12,9 @@ on:
       - 'next.config.*'
       - 'tsconfig.json'
       - 'Dockerfile'
+      - '.dockerignore'
       - 'docker-compose.yml'
+      - 'scripts/**'
   workflow_dispatch:
 
 concurrency:
@@ -69,6 +71,11 @@ jobs:
     needs: build-and-push
     runs-on: ubuntu-latest
     steps:
+      - name: Require the verified SSH host fingerprint
+        env:
+          SSH_HOST_FINGERPRINT: ${{ secrets.VM_SSH_FINGERPRINT }}
+        run: test -n "$SSH_HOST_FINGERPRINT"
+
       - name: Trigger deployment on sofia-vps
         uses: appleboy/ssh-action@v1.2.0
         with:
@@ -76,4 +83,5 @@ jobs:
           port: ${{ secrets.VM_SSH_PORT }}
           username: ${{ secrets.VM_SSH_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
+          fingerprint: ${{ secrets.VM_SSH_FINGERPRINT }}
           script: deploy-hole

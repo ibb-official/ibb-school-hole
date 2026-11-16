@@ -1,11 +1,15 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { getRuntimeConfig } from "@/lib/config";
 
 export const metadata: Metadata = {
   title: "免责声明",
 };
 
+export const dynamic = "force-dynamic";
+
 export default function DisclaimerPage() {
+  const config = getRuntimeConfig();
   return (
     <div className="docs-layout">
       <aside className="surface-card docs-toc" aria-label="声明目录">
@@ -95,6 +99,11 @@ export default function DisclaimerPage() {
           <li>
             本站不主动收集与提供服务无关的个人信息。口令以随机盐 <code className="mono">scrypt</code> 慢哈希存储；访问 IP 经{" "}
             <code className="mono">HMAC</code> 脱敏后仅用于限流与安全审计。
+          </li>
+          <li>
+            {config.aiModerationProvider === "openai_compatible"
+              ? `投稿标题、正文与板块会发送给 ${config.aiModerationProviderName || "未填写的审核服务"} 进行内容审核；该服务的保存期限：${config.aiModerationRetention || "尚未填写"}。`
+              : "当前未启用外部 AI 审核；启用前将在此公布服务方和内容保存期限。"}
           </li>
           <li>
             严禁在站内发布他人真实姓名、学号/工号、班级座次、联系方式、住址、肖像等可识别个人身份的信息，一经发现按违规处理。

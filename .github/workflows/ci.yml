@@ -13,7 +13,13 @@ on:
       - 'tsconfig.json'
       - 'eslint.config.*'
       - 'tests/**'
+      - 'scripts/**'
+      - '.dockerignore'
+      - '.env.example'
+      - 'Dockerfile'
+      - 'docker-compose.yml'
       - '.github/workflows/ci.yml'
+      - '.github/workflows/deploy.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -39,8 +45,43 @@ jobs:
       - name: Run ESLint
         run: npm run lint
 
+      - name: Check TypeScript including tests
+        run: npm run typecheck
+
       - name: Run Security & Backend Tests
         run: npm test
 
-      - name: Run Next.js Build
-        run: npm run build
+      - name: Check Compose configuration
+        run: docker compose config --quiet
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # The image build runs npm run build in the Dockerfile as well.
+      - name: Build the production container
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          tags: ibb-school-hole:pr-check
+          load: true
+          cache-from: type=gha,scope=forum-pr
+          cache-to: type=gha,mode=max,scope=forum-pr
+
+      - name: Smoke test the production container
+        run: |
+          docker run -d --name forum-pr-check --read-only --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --tmpfs /tmp --tmpfs /app/.next/cache \
+            --tmpfs /app/data:rw,uid=1001,gid=1001,mode=0700 \
+            -p 127.0.0.1:39000:3000 ibb-school-hole:pr-check
+          trap 'docker logs forum-pr-check; docker rm -f forum-pr-check' EXIT
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent http://127.0.0.1:39000/api/health; then
+              docker exec forum-pr-check node -e "const DB=require('better-sqlite3'); new DB(':memory:').close()"
+              docker exec forum-pr-check test -f /app/scripts/manage-moderators.cjs
+              docker exec forum-pr-check test -f /app/scripts/backup-database.cjs
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1

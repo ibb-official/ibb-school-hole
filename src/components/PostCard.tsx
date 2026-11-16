@@ -1,16 +1,7 @@
 import Link from "next/link";
 import { Eye, Lock, MessageSquare, Pin } from "lucide-react";
 import type { PublicPostDto } from "@/lib/anonymous";
-
-function formatTimestamp(ms: number): string {
-  const date = new Date(ms);
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  const hour = String(date.getHours()).padStart(2, "0");
-  const minute = String(date.getMinutes()).padStart(2, "0");
-  return `${year}-${month}-${day} ${hour}:${minute}`;
-}
+import { formatForumTime } from "@/lib/time";
 
 export function PostCard({ post }: { post: PublicPostDto }) {
   return (
@@ -50,7 +41,7 @@ export function PostCard({ post }: { post: PublicPostDto }) {
       <p className="post-card-excerpt">{post.content}</p>
 
       <div className="post-card-footer">
-        <span className="tabular-nums">{formatTimestamp(post.createdAt)}</span>
+        <span className="tabular-nums">{formatForumTime(post.createdAt)}</span>
         <div className="post-card-stats tabular-nums">
           <span className="stat-item">
             <Eye size={14} />

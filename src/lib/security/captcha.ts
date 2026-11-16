@@ -8,97 +8,55 @@ export interface CaptchaVerificationResult {
 
 export interface CaptchaProvider {
   readonly name: string;
-  verify(token: string | null | undefined, ipHash: string): Promise<CaptchaVerificationResult>;
+  verify(token: string | null | undefined, ipHash: string, action?: string): Promise<CaptchaVerificationResult>;
 }
 
 const disabledCaptchaProvider: CaptchaProvider = {
   name: "disabled",
   async verify() {
+    if (getRuntimeConfig().isProduction) {
+      return { ok: false, provider: "disabled", error: "人机验证尚未配置。" };
+    }
     return { ok: true, provider: "disabled" };
   },
 };
 
 const turnstileCaptchaProvider: CaptchaProvider = {
   name: "turnstile",
-  async verify(token) {
+  async verify(token, _ipHash, action) {
     const cfg = getRuntimeConfig();
     if (!cfg.captchaSecretKey) {
-      return {
-        ok: false,
-        provider: "turnstile",
-        error: "人机验证服务端密钥未配置，拒绝放行。",
-      };
+      return { ok: false, provider: "turnstile", error: "人机验证尚未配置。" };
     }
-    if (!token || token.trim().length === 0) {
-      return {
-        ok: false,
-        provider: "turnstile",
-        error: "请先完成人机验证后再提交。",
-      };
+    if (!token || typeof token !== "string" || token.trim().length === 0 || token.length > 2048) {
+      return { ok: false, provider: "turnstile", error: "请先完成人机验证后再提交。" };
     }
 
     try {
-      const formBody = new URLSearchParams({
-        secret: cfg.captchaSecretKey,
-        response: token.trim(),
+      const body = new URLSearchParams({ secret: cfg.captchaSecretKey, response: token.trim() });
+      const response = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body,
+        signal: AbortSignal.timeout(8000),
       });
-      const response = await fetch(
-        "https://challenges.cloudflare.com/turnstile/v0/siteverify",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: formBody,
-        }
-      );
-      if (!response.ok) {
-        return {
-          ok: false,
-          provider: "turnstile",
-          error: "人机验证服务响应异常，请稍后重试。",
-        };
-      }
-      const data = (await response.json()) as { success?: boolean };
-      if (!data.success) {
-        return {
-          ok: false,
-          provider: "turnstile",
-          error: "人机验证未通过，请重新完成验证。",
-        };
+      if (!response.ok) throw new Error("siteverify unavailable");
+      const data = (await response.json()) as { success?: boolean; action?: string; hostname?: string };
+      if (!data.success || (action && data.action !== action) ||
+          (cfg.captchaExpectedHostname && data.hostname?.toLowerCase() !== cfg.captchaExpectedHostname)) {
+        return { ok: false, provider: "turnstile", error: "人机验证未通过，请重新完成验证。" };
       }
       return { ok: true, provider: "turnstile" };
     } catch {
-      return {
-        ok: false,
-        provider: "turnstile",
-        error: "无法连接到人机验证服务，请稍后重试。",
-      };
+      return { ok: false, provider: "turnstile", error: "人机验证服务暂不可用，请稍后重试。" };
     }
   },
 };
 
 const altchaCaptchaProvider: CaptchaProvider = {
   name: "altcha",
-  async verify(token) {
-    const cfg = getRuntimeConfig();
-    if (!cfg.captchaSecretKey) {
-      return {
-        ok: false,
-        provider: "altcha",
-        error: "Altcha 自托管验证密钥尚未配置。",
-      };
-    }
-    if (!token || token.trim().length === 0) {
-      return {
-        ok: false,
-        provider: "altcha",
-        error: "请先完成工作量证明人机校验后再提交。",
-      };
-    }
-    return {
-      ok: false,
-      provider: "altcha",
-      error: "Altcha 校验器待二期完整接入后启用。",
-    };
+  async verify() {
+    return { ok: false, provider: "altcha", error: "该人机验证方式尚未接入。" };
   },
 };
 
@@ -111,7 +69,8 @@ export function getCaptchaProvider(): CaptchaProvider {
 
 export async function verifyCaptchaToken(
   token: string | null | undefined,
-  ipHash: string
+  ipHash: string,
+  action?: string
 ): Promise<CaptchaVerificationResult> {
-  return getCaptchaProvider().verify(token, ipHash);
+  return getCaptchaProvider().verify(token, ipHash, action);
 }

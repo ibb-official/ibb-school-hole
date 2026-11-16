@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { assertFeatureEnabled } from "@/lib/config";
+import { assertPostingEnabled } from "@/lib/forum-status";
 import { getDb } from "@/lib/db";
-import { createPost, listPosts } from "@/lib/forum-service";
+import { createPost, listPosts, ServiceError } from "@/lib/forum-service";
 import {
   assertCsrf,
   buildSecurityContext,
@@ -49,10 +49,15 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    assertFeatureEnabled("posting");
+    assertPostingEnabled();
     assertCsrf(request);
     const user = requireAuthenticatedUser(request);
     const body = await parseJsonBody<CreatePostBody>(request);
+    if (typeof body.categorySlug !== "string" || typeof body.title !== "string" ||
+        typeof body.content !== "string" ||
+        (body.isAnonymous !== undefined && typeof body.isAnonymous !== "boolean")) {
+      throw new ServiceError("INVALID_INPUT", 400, "帖子内容格式无效。");
+    }
     const ctx = buildSecurityContext(request);
 
     const result = await createPost(
@@ -62,7 +67,7 @@ export async function POST(request: NextRequest) {
         categorySlug: body.categorySlug ?? "",
         title: body.title ?? "",
         content: body.content ?? "",
-        isAnonymous: Boolean(body.isAnonymous),
+        isAnonymous: body.isAnonymous ?? false,
       },
       ctx
     );

@@ -15,10 +15,13 @@ export interface RateLimitResult {
 }
 
 export const RATE_LIMIT_POLICIES = {
-  LOGIN_IP: { limit: 10, windowMs: 15 * 60 * 1000 },
+  LOGIN_IP: { limit: 40, windowMs: 15 * 60 * 1000 },
+  REGISTER_IP_ATTEMPTS: { limit: 30, windowMs: 15 * 60 * 1000 },
   LOGIN_ACCOUNT: { limit: 8, windowMs: 15 * 60 * 1000 },
-  REGISTER_IP_HOURLY: { limit: 2, windowMs: 60 * 60 * 1000 },
-  REGISTER_IP_DAILY: { limit: 3, windowMs: 24 * 60 * 60 * 1000 },
+  REGISTER_IP_HOURLY: { limit: 20, windowMs: 60 * 60 * 1000 },
+  REGISTER_IP_DAILY: { limit: 60, windowMs: 24 * 60 * 60 * 1000 },
+  POST_ATTEMPTS: { limit: 12, windowMs: 5 * 60 * 1000 },
+  COMMENT_ATTEMPTS: { limit: 60, windowMs: 15 * 60 * 1000 },
   POST_INTERVAL: { limit: 1, windowMs: 60 * 1000 },
   COMMENT_INTERVAL: { limit: 1, windowMs: 15 * 1000 },
   COMMENT_HOURLY: { limit: 30, windowMs: 60 * 60 * 1000 },
@@ -39,11 +42,16 @@ export function calculateAccountLockoutMs(failedCount: number): number {
   return 30 * 60 * 1000; // cap at 30 minutes
 }
 
+let cleanupTick = 0;
+
 export function consumeRateLimit(
   db: Database.Database,
   policy: RateLimitPolicy
 ): RateLimitResult {
   const now = policy.nowMs ?? Date.now();
+  if (++cleanupTick % 128 === 0) {
+    db.prepare("DELETE FROM rate_limit_buckets WHERE reset_at <= ?").run(now);
+  }
   const tx = db.transaction((): RateLimitResult => {
     const existing = db
       .prepare(
