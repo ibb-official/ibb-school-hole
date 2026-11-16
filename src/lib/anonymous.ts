@@ -70,23 +70,49 @@ export interface PublicCommentDto {
 
 /**
  * 为同一主题帖内的匿名参与方派生恒定且跨帖互不关联的代号：
- * - 帖子作者恒为 "洞主"
- * - 其余匿名评论者使用 HMAC-SHA256(postId:authorId) 生成 "匿名同学 #XXXX"
+ * - 匿名帖作者以匿名身份回复时显示为“洞主”
+ * - 其他匿名评论者使用帖内独立的 HMAC 代号；冲突时延长代号
  */
 export function deriveAnonymousAlias(
   postId: number,
   authorId: number,
-  postAuthorId: number
+  postAuthorId: number,
+  postIsAnonymous: boolean,
+  usedAliases: ReadonlySet<string> = new Set()
 ): string {
-  if (authorId === postAuthorId) {
+  if (postIsAnonymous && authorId === postAuthorId) {
     return "洞主";
   }
   const secret = getRuntimeConfig().anonymousHmacSecret;
-  const digest = crypto
-    .createHmac("sha256", secret)
-    .update(`post:${postId}:author:${authorId}`)
-    .digest("hex");
-  return `匿名同学 #${digest.slice(0, 4).toUpperCase()}`;
+  for (let attempt = 0; ; attempt += 1) {
+    const digest = crypto
+      .createHmac("sha256", secret)
+      .update(`post:${postId}:author:${authorId}:attempt:${attempt}`)
+      .digest("hex")
+      .toUpperCase();
+    for (let length = 12; length <= digest.length; length += 2) {
+      const alias = `匿名同学 #${digest.slice(0, length)}`;
+      if (!usedAliases.has(alias)) return alias;
+    }
+  }
+}
+
+/** Participants must be ordered by their first comment, including pending comments. */
+export function buildAnonymousAliases(
+  postId: number,
+  postAuthorId: number,
+  postIsAnonymous: boolean,
+  authorIds: readonly number[]
+): Map<number, string> {
+  const aliases = new Map<number, string>();
+  const used = new Set<string>();
+  for (const authorId of authorIds) {
+    if (aliases.has(authorId)) continue;
+    const alias = deriveAnonymousAlias(postId, authorId, postAuthorId, postIsAnonymous, used);
+    aliases.set(authorId, alias);
+    used.add(alias);
+  }
+  return aliases;
 }
 
 export function serializePostDto(row: PostRowForDto): PublicPostDto {
@@ -114,17 +140,21 @@ export function serializePostDto(row: PostRowForDto): PublicPostDto {
 
 export function serializeCommentDto(
   row: CommentRowForDto,
-  postAuthorId: number
+  postAuthorId: number,
+  postIsAnonymous: boolean,
+  aliases?: ReadonlyMap<number, string>
 ): PublicCommentDto {
   const isAnonymous = row.is_anonymous === 1;
-  const isPostAuthor = row.author_id === postAuthorId;
+  // Showing an author badge across different visibility modes links identities.
+  const isPostAuthor = row.author_id === postAuthorId && isAnonymous === postIsAnonymous;
   return {
     id: row.id,
     postId: row.post_id,
     authorId: isAnonymous ? null : row.author_id,
     authorUsername: isAnonymous ? null : row.author_username,
     authorDisplayName: isAnonymous
-      ? deriveAnonymousAlias(row.post_id, row.author_id, postAuthorId)
+      ? aliases?.get(row.author_id) ??
+        deriveAnonymousAlias(row.post_id, row.author_id, postAuthorId, postIsAnonymous)
       : row.author_username,
     isAnonymous,
     isPostAuthor,

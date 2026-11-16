@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getPublicSystemStatus } from "@/lib/config";
+import { getForumSystemStatus } from "@/lib/forum-status";
 import { getDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -8,7 +8,7 @@ export async function GET() {
   try {
     const db = getDb();
     const row = db.prepare("SELECT 1 AS ok").get() as { ok: number };
-    const status = getPublicSystemStatus();
+    const status = getForumSystemStatus();
     return NextResponse.json({
       ok: row.ok === 1,
       service: "ibb-school-hole",

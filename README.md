@@ -55,10 +55,13 @@
 └── README.md                   项目说明与本地开发指引
 ```
 
-### 一期环境变量与总闸门说明
+### 开放前配置
 
-- 默认 `FEATURE_AUTH_ENABLED=false`、`FEATURE_POSTING_ENABLED=false`：页面完整展示，但登录/注册/发帖按钮固定 `disabled`，对应写入接口统一返回 `403 FEATURE_LOCKED`，数据库保持 `0` 用户、`0` 帖子。
-- 后续接入人机验证（`CAPTCHA_PROVIDER=turnstile|altcha`）与 AI 内容审核（`AI_MODERATION_PROVIDER=openai_compatible`）后，在 `/opt/ibb-school-hole/.env` 配置密钥并开启总闸门即可正式运行（完整变量列表见 `.env.example`）。
+- `FEATURE_AUTH_ENABLED` 与 `FEATURE_POSTING_ENABLED` 默认均为 `false`。生产开启账号功能前，须配置 Turnstile 站点密钥和服务端密钥；Altcha 尚未实现，不会被视为可用。
+- 生产开启发帖和评论还需配置 AI 审核接口、审核服务名称及内容保存期限，并至少有一个活动的审核员或管理员。审核服务异常时，内容进入人工待审；举报在发帖暂停时仍可提交。
+- 先配置注册，让审核员注册，再通过受控运维通道授予角色，最后开放发帖。角色管理及审核流程见 [审核操作说明](docs/moderation.md)，SQLite 备份与恢复见 [备份说明](docs/backup.md)。
+- 生产密钥仅存于 `/opt/ibb-school-hole/.env` 和 GitHub Secrets；变量见 `.env.example`。部署工作流使用已核验的 `VM_SSH_FINGERPRINT` 校验生产主机身份。
+- 注册目前只支持用户名与密码，不提供邮箱验证、密码找回或登录提醒。
 
 ---
 
@@ -71,12 +74,12 @@
 wt new 校园论坛 <任务slug>
 cd ~/dev/.wt/校园论坛/<任务slug>
 
-# 2. 安装依赖与本地开发（应用脚手架初始化后，遵循全局规范第 5c 节在本地盘构建区验证）
-npm ci
-npm run dev
+# 2. 在本机 $BUILD_SCRATCH_ROOT/校园论坛/<任务slug> 创建源码副本并安装依赖
+#    不要在 worktree 内放置 node_modules、.next 或测试数据库。
 
-# 3. 提交前校验
-npm run lint && npm run build
+# 3. 在构建区运行快速检查；完整构建与容器检查由 PR CI 运行
+npm ci
+npm run lint && npm run typecheck && npm test
 ```
 
 ---

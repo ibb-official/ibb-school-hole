@@ -59,7 +59,7 @@ function restoreEnv() {
     if (savedEnv[key] === undefined) {
       delete process.env[key];
     } else {
-      process.env[key] = savedEnv[key];
+      (process.env as Record<string, string | undefined>)[key] = savedEnv[key];
     }
   }
 }
@@ -173,7 +173,7 @@ describe("ibb-school-hole security, gates, anti-abuse and anonymous isolation", 
     assert.equal(verifyCsrfRequest(goodReq).ok, true);
   });
 
-  it("supports username-only and optional-email registration, scrypt hashing, session hashing, anti-bot and IP quotas", async () => {
+  it("supports username-only registration, scrypt hashing, session hashing and anti-bot checks", async () => {
     const t0 = 1_760_000_000_000;
     const token = issueFormTimingToken(t0);
 
@@ -276,12 +276,20 @@ describe("ibb-school-hole security, gates, anti-abuse and anonymous isolation", 
       .get(regA.user.id) as { token_hash: string };
     assert.notEqual(storedSession.token_hash, regA.rawSessionToken);
 
-    // 6. Registration with optional bound email succeeds
+    // Email cannot be claimed without a verification mechanism.
+    await assert.rejects(
+      () => registerUser(db, {
+        username: "StudyBuddy", email: "buddy@example.com", password: "StrongPass88!",
+        agreedRules: true, formIssuedAt: token.issuedAt, formSig: token.sig,
+      }, makeCtx("198.51.100.10", t0 + 6000)),
+      (err: unknown) => err instanceof ServiceError && err.code === "EMAIL_NOT_SUPPORTED"
+    );
+
+    // Other users on a shared network may still register.
     const regB = await registerUser(
       db,
       {
         username: "StudyBuddy",
-        email: "Buddy@Example.COM",
         password: "StrongPass88!",
         agreedRules: true,
         formIssuedAt: token.issuedAt,
@@ -289,12 +297,9 @@ describe("ibb-school-hole security, gates, anti-abuse and anonymous isolation", 
       },
       makeCtx("198.51.100.10", t0 + 6000)
     );
-    assert.equal(regB.user.hasBoundEmail, true);
+    assert.equal(regB.user.hasBoundEmail, false);
 
-    // 7. 3rd registration from same IP within 1 hour hits rate limit
-    await assert.rejects(
-      () =>
-        registerUser(
+    const regC = await registerUser(
           db,
           {
             username: "ThirdUser",
@@ -304,15 +309,11 @@ describe("ibb-school-hole security, gates, anti-abuse and anonymous isolation", 
             formSig: token.sig,
           },
           makeCtx("198.51.100.10", t0 + 7000)
-        ),
-      (err: unknown) =>
-        err instanceof ServiceError &&
-        err.status === 429 &&
-        err.code === "RATE_LIMITED"
     );
+    assert.equal(regC.user.username, "ThirdUser");
   });
 
-  it("defends against password brute force with exponential lockout and uniform invalid-user responses", async () => {
+  it("keeps failed logins uniform and allows a legitimate login from another network", async () => {
     const t0 = 1_760_000_000_000;
     const token = issueFormTimingToken(t0);
 
@@ -320,7 +321,6 @@ describe("ibb-school-hole security, gates, anti-abuse and anonymous isolation", 
       db,
       {
         username: "TargetStudent",
-        email: "target@example.com",
         password: "CorrectHorse99!",
         agreedRules: true,
         formIssuedAt: token.issuedAt,
@@ -345,7 +345,7 @@ describe("ibb-school-hole security, gates, anti-abuse and anonymous isolation", 
       (err: unknown) =>
         err instanceof ServiceError &&
         err.status === 401 &&
-        err.message === "用户名/邮箱或密码错误。"
+        err.message === "用户名或密码错误。"
     );
 
     // 4 wrong password attempts from rotating IPs -> 401
@@ -366,7 +366,7 @@ describe("ibb-school-hole security, gates, anti-abuse and anonymous isolation", 
       );
     }
 
-    // 5th wrong attempt triggers account lockout (429 ACCOUNT_LOCKED)
+    // A fifth failure from another IP cannot lock out the whole account.
     await assert.rejects(
       () =>
         authenticateUser(
@@ -381,16 +381,15 @@ describe("ibb-school-hole security, gates, anti-abuse and anonymous isolation", 
         ),
       (err: unknown) =>
         err instanceof ServiceError &&
-        err.status === 429 &&
-        err.code === "ACCOUNT_LOCKED" &&
-        (err.retryAfterSeconds ?? 0) >= 59
+        err.status === 401 &&
+        err.code === "INVALID_CREDENTIALS"
     );
 
-    // After lockout window expires (65s later), login via bound email succeeds and revocable session works
+    // Login by username succeeds and the session can be revoked.
     const loginRes = await authenticateUser(
       db,
       {
-        identifier: "TARGET@example.com",
+        identifier: "TargetStudent",
         password: "CorrectHorse99!",
         formIssuedAt: token.issuedAt,
         formSig: token.sig,
@@ -548,7 +547,7 @@ describe("ibb-school-hole security, gates, anti-abuse and anonymous isolation", 
 
     assert.equal(c1.comment.authorId, null);
     assert.equal(c1.comment.authorUsername, null);
-    assert.match(c1.comment.authorDisplayName, /^匿名同学 #[0-9A-F]{4}$/);
+    assert.match(c1.comment.authorDisplayName, /^匿名同学 #[0-9A-F]{12,}$/);
     // Same user in same post keeps identical alias
     assert.equal(c1.comment.authorDisplayName, c2.comment.authorDisplayName);
     // Same user in different post gets different unlinkable alias

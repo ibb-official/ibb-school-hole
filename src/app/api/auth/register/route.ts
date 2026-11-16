@@ -36,7 +36,7 @@ export async function POST(request: NextRequest) {
         username: body.username ?? "",
         email: body.email ?? null,
         password: body.password ?? "",
-        agreedRules: Boolean(body.agreedRules),
+        agreedRules: body.agreedRules === true,
         captchaToken: body.captchaToken ?? null,
         websiteHoneypot: body.website ?? null,
         formIssuedAt: body.formIssuedAt ?? null,

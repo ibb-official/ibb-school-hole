@@ -10,10 +10,17 @@ export interface SecurityAuditEntry {
   createdAt?: number;
 }
 
+let cleanupTick = 0;
+const AUDIT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
 export function recordSecurityAudit(
   db: Database.Database,
   entry: SecurityAuditEntry
 ): void {
+  const now = entry.createdAt ?? Date.now();
+  if (++cleanupTick % 128 === 0) {
+    db.prepare("DELETE FROM security_audit_logs WHERE created_at < ?").run(now - AUDIT_RETENTION_MS);
+  }
   db.prepare(
     `
     INSERT INTO security_audit_logs (
@@ -27,6 +34,6 @@ export function recordSecurityAudit(
     entry.target ?? null,
     entry.outcome,
     entry.detail ?? null,
-    entry.createdAt ?? Date.now()
+    now
   );
 }

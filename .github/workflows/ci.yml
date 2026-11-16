@@ -13,7 +13,13 @@ on:
       - 'tsconfig.json'
       - 'eslint.config.*'
       - 'tests/**'
+      - 'scripts/**'
+      - '.dockerignore'
+      - '.env.example'
+      - 'Dockerfile'
+      - 'docker-compose.yml'
       - '.github/workflows/ci.yml'
+      - '.github/workflows/deploy.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -39,8 +45,14 @@ jobs:
       - name: Run ESLint
         run: npm run lint
 
+      - name: Check TypeScript including tests
+        run: npm run typecheck
+
       - name: Run Security & Backend Tests
         run: npm test
 
-      - name: Run Next.js Build
-        run: npm run build
+      # The image build runs npm run build in the Dockerfile as well.
+      - name: Build and check the production container
+        run: |
+          docker compose config --quiet
+          docker build --tag ibb-school-hole:pr-check .

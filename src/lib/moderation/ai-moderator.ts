@@ -45,6 +45,7 @@ const openAiCompatibleModerator: AiModerator = {
     try {
       const response = await fetch(cfg.aiModerationApiUrl, {
         method: "POST",
+        signal: AbortSignal.timeout(10_000),
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${cfg.aiModerationApiKey}`,

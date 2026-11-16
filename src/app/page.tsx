@@ -3,7 +3,7 @@ import { DEFAULT_CATEGORIES, getCategoryBySlug } from "@/data/categories";
 import { EmptyFeedState } from "@/components/EmptyFeedState";
 import { PostCard } from "@/components/PostCard";
 import { SystemStatusCard } from "@/components/SystemStatusCard";
-import { getPublicSystemStatus } from "@/lib/config";
+import { getForumSystemStatus } from "@/lib/forum-status";
 import { getDb } from "@/lib/db";
 import { getForumStats, listPosts } from "@/lib/forum-service";
 
@@ -13,6 +13,7 @@ function buildFilterUrl(params: {
   category?: string;
   sort?: string;
   q?: string;
+  page?: number;
 }): string {
   const sp = new URLSearchParams();
   if (params.category && params.category !== "all") {
@@ -24,6 +25,9 @@ function buildFilterUrl(params: {
   if (params.q && params.q.trim()) {
     sp.set("q", params.q.trim());
   }
+  if (params.page && params.page > 1) {
+    sp.set("page", String(params.page));
+  }
   const qs = sp.toString();
   return qs ? `/?${qs}` : "/";
 }
@@ -31,7 +35,7 @@ function buildFilterUrl(params: {
 export default async function HomePage({
   searchParams,
 }: {
-  searchParams: Promise<{ category?: string; sort?: string; q?: string }>;
+  searchParams: Promise<{ category?: string; sort?: string; q?: string; page?: string }>;
 }) {
   const sp = await searchParams;
   const rawCategory = (sp.category ?? "all").trim();
@@ -40,17 +44,34 @@ export default async function HomePage({
   const activeCategorySlug = activeCategory ? activeCategory.slug : "all";
   const sort = sp.sort === "latest" ? "latest" : "active";
   const q = (sp.q ?? "").trim();
+  const pageParam = Number(sp.page ?? "1");
+  const requestedPage = Number.isSafeInteger(pageParam) && pageParam > 0
+    ? Math.min(pageParam, 1_000_000)
+    : 1;
+  const pageSize = 20;
 
   const db = getDb();
-  const status = getPublicSystemStatus();
+  const status = getForumSystemStatus();
   const stats = getForumStats(db);
-  const feed = listPosts(db, {
+  let page = requestedPage;
+  let feed = listPosts(db, {
     categorySlug: activeCategorySlug,
     sort,
     q,
-    limit: 20,
-    offset: 0,
+    limit: pageSize,
+    offset: (page - 1) * pageSize,
   });
+  const totalPages = Math.max(1, Math.ceil(feed.total / pageSize));
+  if (page > totalPages) {
+    page = totalPages;
+    feed = listPosts(db, {
+      categorySlug: activeCategorySlug,
+      sort,
+      q,
+      limit: pageSize,
+      offset: (page - 1) * pageSize,
+    });
+  }
 
   return (
     <>
@@ -171,6 +192,7 @@ export default async function HomePage({
             <EmptyFeedState
               activeCategoryName={activeCategory?.name}
               hasSearchQuery={Boolean(q)}
+              postingEnabled={status.postingEnabled}
             />
           ) : (
             <div className="post-list">
@@ -178,6 +200,21 @@ export default async function HomePage({
                 <PostCard key={post.id} post={post} />
               ))}
             </div>
+          )}
+          {totalPages > 1 && (
+            <nav className="feed-pagination" aria-label="帖子分页">
+              {page > 1 ? (
+                <Link className="btn btn-secondary" href={buildFilterUrl({ category: activeCategorySlug, sort, q, page: page - 1 })}>
+                  上一页
+                </Link>
+              ) : <span className="btn btn-secondary" aria-disabled="true">上一页</span>}
+              <span className="tabular-nums">第 {page} / {totalPages} 页</span>
+              {page < totalPages ? (
+                <Link className="btn btn-secondary" href={buildFilterUrl({ category: activeCategorySlug, sort, q, page: page + 1 })}>
+                  下一页
+                </Link>
+              ) : <span className="btn btn-secondary" aria-disabled="true">下一页</span>}
+            </nav>
           )}
         </section>
 

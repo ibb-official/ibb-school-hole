@@ -2,15 +2,17 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import Link from "next/link";
+import { TurnstileWidget } from "@/components/TurnstileWidget";
 import { useRouter } from "next/navigation";
-import { Eye, EyeOff, Lock, ShieldAlert } from "lucide-react";
+import { Eye, EyeOff, Lock } from "lucide-react";
 
 interface LoginFormProps {
   authEnabled: boolean;
   captchaProvider: string;
+  captchaSiteKey: string;
 }
 
-export function LoginForm({ authEnabled, captchaProvider }: LoginFormProps) {
+export function LoginForm({ authEnabled, captchaProvider, captchaSiteKey }: LoginFormProps) {
   const router = useRouter();
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
@@ -21,6 +23,8 @@ export function LoginForm({ authEnabled, captchaProvider }: LoginFormProps) {
   );
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  const [captchaReset, setCaptchaReset] = useState(0);
 
   useEffect(() => {
     if (!authEnabled) return;
@@ -59,6 +63,7 @@ export function LoginForm({ authEnabled, captchaProvider }: LoginFormProps) {
           identifier,
           password,
           website,
+          captchaToken,
           formIssuedAt: formToken?.issuedAt ?? null,
           formSig: formToken?.sig ?? null,
         }),
@@ -71,11 +76,16 @@ export function LoginForm({ authEnabled, captchaProvider }: LoginFormProps) {
         setErrorMsg(payload.message ?? "登录失败，请检查账号或密码。");
         return;
       }
+      window.dispatchEvent(new Event("ibb-auth-change"));
       router.push("/");
       router.refresh();
     } catch {
       setErrorMsg("网络请求失败，请稍后重试。");
     } finally {
+      if (captchaProvider === "turnstile") {
+        setCaptchaToken(null);
+        setCaptchaReset((value) => value + 1);
+      }
       setSubmitting(false);
     }
   }
@@ -84,7 +94,7 @@ export function LoginForm({ authEnabled, captchaProvider }: LoginFormProps) {
     <div className="surface-card form-card">
       <h1 className="form-title">登录校园论坛</h1>
       <p className="form-subtitle">
-        支持使用注册用户名或已绑定邮箱登录（服务端有状态会话 + 防爆破保护）
+        使用用户名与密码登录。
       </p>
 
       {!authEnabled && (
@@ -92,7 +102,7 @@ export function LoginForm({ authEnabled, captchaProvider }: LoginFormProps) {
           <Lock size={17} style={{ flexShrink: 0, marginTop: "2px" }} />
           <div>
             <strong>当前暂未开放登录（一期锁定态）</strong>
-            后端数据库、密码慢哈希与双维度防爆破机制已就绪；因人机验证与 AI 审核模块尚未接入，登录按钮已锁定为不可提交状态，数据库保持 0 用户。
+            账号功能暂未开放。
           </div>
         </div>
       )}
@@ -113,13 +123,13 @@ export function LoginForm({ authEnabled, captchaProvider }: LoginFormProps) {
 
         <div className="field-group">
           <label htmlFor="login-identifier" className="field-label">
-            用户名或绑定邮箱
+            用户名
           </label>
           <input
             id="login-identifier"
             type="text"
             className="text-input"
-            placeholder="请输入用户名或已绑定的邮箱"
+            placeholder="请输入用户名"
             autoComplete="username"
             value={identifier}
             onChange={(e) => setIdentifier(e.target.value)}
@@ -131,7 +141,7 @@ export function LoginForm({ authEnabled, captchaProvider }: LoginFormProps) {
             <label htmlFor="login-password" className="field-label">
               密码
             </label>
-            <span className="field-hint">连续错误 5 次触发账号指数退避锁定</span>
+            <span className="field-hint">登录尝试过多时请稍后再试</span>
           </div>
           <div className="input-with-addon">
             <input
@@ -155,20 +165,9 @@ export function LoginForm({ authEnabled, captchaProvider }: LoginFormProps) {
           </div>
         </div>
 
-        <div className="captcha-slot">
-          <div className="captcha-slot-left">
-            <ShieldAlert size={18} />
-            <div>
-              <div style={{ fontWeight: 600, color: "var(--text-primary)" }}>
-                人机验证模块预留槽位
-              </div>
-              <div style={{ fontSize: "12px" }}>
-                当前适配器：{captchaProvider === "disabled" ? "待接入（Turnstile / Altcha）" : captchaProvider}
-              </div>
-            </div>
-          </div>
-          <span className="status-tag status-tag-pending">待接入</span>
-        </div>
+        {authEnabled && captchaProvider === "turnstile" && (
+          <TurnstileWidget siteKey={captchaSiteKey} action="login" onToken={setCaptchaToken} resetCounter={captchaReset} />
+        )}
 
         {errorMsg && (
           <div className="field-hint field-hint-error" role="alert">
@@ -178,8 +177,8 @@ export function LoginForm({ authEnabled, captchaProvider }: LoginFormProps) {
 
         <button
           type="submit"
-          disabled={!authEnabled || submitting}
-          aria-disabled={!authEnabled || submitting}
+          disabled={!authEnabled || submitting || (captchaProvider === "turnstile" && !captchaToken)}
+          aria-disabled={!authEnabled || submitting || (captchaProvider === "turnstile" && !captchaToken)}
           className={`btn btn-lg btn-full btn-primary ${
             !authEnabled ? "btn-locked" : ""
           }`}

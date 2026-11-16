@@ -33,8 +33,8 @@ function normalizeIp(candidate: string | null): string | null {
 }
 
 /**
- * 仅在 TRUST_PROXY_HEADERS=true（明确由本机 edge-caddy 反向代理透传）时采信转发头，
- * 避免公网请求直接伪造 X-Forwarded-For 绕过防爆破与注册配额限制。
+ * 仅在站点仅经可信 Caddy 代理访问、且代理覆盖 X-Forwarded-For 时启用。
+ * 不读取 Caddy 默认透传的客户端 X-Real-IP。
  */
 export function extractClientIp(headers: HeaderSource): string {
   const cfg = getRuntimeConfig();
@@ -42,14 +42,10 @@ export function extractClientIp(headers: HeaderSource): string {
     return "127.0.0.1";
   }
 
-  const realIp = normalizeIp(readHeader(headers, "x-real-ip"));
-  if (realIp) {
-    return realIp;
-  }
-
   const forwardedFor = readHeader(headers, "x-forwarded-for");
   if (forwardedFor) {
-    const parts = forwardedFor.split(",").map((part) => part.trim());
+    // Caddy 在未信任上游的默认配置下重置此头；从最近的一跳开始解析。
+    const parts = forwardedFor.split(",").map((part) => part.trim()).reverse();
     for (const part of parts) {
       const valid = normalizeIp(part);
       if (valid) return valid;

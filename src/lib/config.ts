@@ -42,10 +42,13 @@ export interface RuntimeConfig {
   captchaProvider: CaptchaProviderName;
   captchaSiteKey: string;
   captchaSecretKey: string;
+  captchaExpectedHostname: string;
   aiModerationProvider: AiModerationProviderName;
   aiModerationApiUrl: string;
   aiModerationApiKey: string;
   aiModerationModel: string;
+  aiModerationProviderName: string;
+  aiModerationRetention: string;
   sessionSecret: string;
   anonymousHmacSecret: string;
   ipHashSalt: string;
@@ -181,10 +184,14 @@ export function getRuntimeConfig(): RuntimeConfig {
     captchaProvider: parseCaptchaProvider(process.env.CAPTCHA_PROVIDER),
     captchaSiteKey: (process.env.CAPTCHA_SITE_KEY ?? "").trim(),
     captchaSecretKey: (process.env.CAPTCHA_SECRET_KEY ?? "").trim(),
+    captchaExpectedHostname: (process.env.CAPTCHA_EXPECTED_HOSTNAME ?? "").trim().toLowerCase() ||
+      (isProduction ? "hole.bj166zx.cn" : ""),
     aiModerationProvider: parseAiProvider(process.env.AI_MODERATION_PROVIDER),
     aiModerationApiUrl: (process.env.AI_MODERATION_API_URL ?? "").trim(),
     aiModerationApiKey: (process.env.AI_MODERATION_API_KEY ?? "").trim(),
     aiModerationModel: (process.env.AI_MODERATION_MODEL ?? "").trim(),
+    aiModerationProviderName: (process.env.AI_MODERATION_PROVIDER_NAME ?? "").trim(),
+    aiModerationRetention: (process.env.AI_MODERATION_RETENTION ?? "").trim(),
     sessionSecret,
     anonymousHmacSecret,
     ipHashSalt,
@@ -194,12 +201,29 @@ export function getRuntimeConfig(): RuntimeConfig {
   };
 }
 
+function captchaIsReady(cfg: RuntimeConfig): boolean {
+  return cfg.captchaProvider === "turnstile" && Boolean(cfg.captchaSiteKey && cfg.captchaSecretKey);
+}
+
+function moderationIsReady(cfg: RuntimeConfig): boolean {
+  if (cfg.aiModerationProvider !== "openai_compatible" || !cfg.aiModerationApiKey ||
+      (cfg.isProduction && (!cfg.aiModerationProviderName || !cfg.aiModerationRetention))) return false;
+  try {
+    const url = new URL(cfg.aiModerationApiUrl);
+    return url.protocol === "https:" || (!cfg.isProduction && url.protocol === "http:");
+  } catch {
+    return false;
+  }
+}
+
 export function assertFeatureEnabled(kind: FeatureKind): RuntimeConfig {
   const config = getRuntimeConfig();
-  if (kind === "auth" && !config.authEnabled) {
+  const captchaReady = captchaIsReady(config);
+  if (kind === "auth" && (!config.authEnabled || (config.isProduction && !captchaReady))) {
     throw new FeatureLockedError("auth");
   }
-  if (kind === "posting" && !config.postingEnabled) {
+  if (kind === "posting" && (!config.postingEnabled ||
+      (config.isProduction && (!captchaReady || !moderationIsReady(config))))) {
     throw new FeatureLockedError("posting");
   }
   return config;
@@ -207,27 +231,27 @@ export function assertFeatureEnabled(kind: FeatureKind): RuntimeConfig {
 
 export function getPublicSystemStatus(): PublicSystemStatus {
   const cfg = getRuntimeConfig();
-  const captchaReady = cfg.captchaProvider !== "disabled" && cfg.captchaSecretKey.length > 0;
-  const aiModerationReady =
-    cfg.aiModerationProvider !== "disabled" &&
-    cfg.aiModerationApiUrl.length > 0 &&
-    cfg.aiModerationApiKey.length > 0;
+  const captchaReady = captchaIsReady(cfg);
+  const aiModerationReady = moderationIsReady(cfg);
+  const authEnabled = cfg.authEnabled && (!cfg.isProduction || captchaReady);
+  const postingEnabled = cfg.postingEnabled && (!cfg.isProduction || (captchaReady && aiModerationReady));
 
   let phaseBadge = "一期锁定态 · 架构已就绪";
-  let lockSummary =
-    "数据库与安全风控底座已部署完毕；因人机验证与 AI 审核尚未接入，当前暂不开放账号注册、登录与发帖。";
-
-  if (cfg.authEnabled && cfg.postingEnabled) {
+  let lockSummary = "账号或发帖功能尚未开放，或必要的安全服务尚未配置。";
+  if (authEnabled && postingEnabled) {
     phaseBadge = "社区已开放运行";
     lockSummary = "注册登录与发帖审核通道均已开启。";
-  } else if (cfg.authEnabled && !cfg.postingEnabled) {
+  } else if (authEnabled) {
     phaseBadge = "部分开放 · 发帖锁定中";
     lockSummary = "账号服务已开启，发帖通道仍处于锁定状态。";
+  } else if (postingEnabled) {
+    phaseBadge = "部分开放 · 账号锁定中";
+    lockSummary = "账号服务暂未开放。";
   }
 
   return {
-    authEnabled: cfg.authEnabled,
-    postingEnabled: cfg.postingEnabled,
+    authEnabled,
+    postingEnabled,
     captchaProvider: cfg.captchaProvider,
     captchaReady,
     aiModerationProvider: cfg.aiModerationProvider,

@@ -16,7 +16,7 @@ export function SystemStatusCard({
         <div className="panel-header">
           <h2 className="panel-title">运行与风控状态</h2>
           <span className={`phase-pill ${allOpen ? "phase-pill-ready" : ""}`}>
-            {allOpen ? "已开放" : "一期锁定中"}
+            {status.phaseBadge}
           </span>
         </div>
 

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { SubmitPostForm } from "@/components/SubmitPostForm";
-import { getPublicSystemStatus } from "@/lib/config";
+import { getForumSystemStatus } from "@/lib/forum-status";
 
 export const metadata: Metadata = {
   title: "发布帖子",
@@ -9,7 +9,7 @@ export const metadata: Metadata = {
 export const dynamic = "force-dynamic";
 
 export default function SubmitPage() {
-  const status = getPublicSystemStatus();
+  const status = getForumSystemStatus();
 
   return (
     <div className="submit-page-wrap">

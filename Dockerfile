@@ -45,6 +45,8 @@ RUN chmod -R 755 ./public
 
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/scripts/manage-moderators.cjs ./scripts/manage-moderators.cjs
+COPY --from=builder --chown=nextjs:nodejs /app/scripts/backup-database.cjs ./scripts/backup-database.cjs
 
 USER nextjs
 
